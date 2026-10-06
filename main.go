@@ -1642,7 +1642,8 @@ func main() {
 	api := &apiServer{store: store, sm: sm}
 
 	mux := http.NewServeMux()
-	// auth routes (public)
+	// public routes
+	mux.HandleFunc("GET /api/health", api.handleHealth)
 	mux.HandleFunc("POST /api/auth/login", api.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", api.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", api.handleMe)

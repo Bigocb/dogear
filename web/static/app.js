@@ -392,9 +392,11 @@ function renderBookSheet() {
       if (!rm.classList.contains('armed')) {
         rm.classList.add('armed');
         rm.textContent = 'Tap again to remove';
-        setTimeout(() => { rm.classList.remove('armed'); rm.textContent = 'Remove from my shelf'; }, 3500);
+        clearTimeout(rm._disarm);
+        rm._disarm = setTimeout(() => { rm.classList.remove('armed'); rm.textContent = 'Remove from my shelf'; }, 6000);
         return;
       }
+      clearTimeout(rm._disarm);
       run(rm, async () => {
         await api(`/books/${b.id}`, { method: 'DELETE' });
         toast(`Removed “${b.title}”. It's still in the household library.`);
