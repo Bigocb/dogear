@@ -6,58 +6,119 @@
 <title>Dogear Reader</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#14161a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="/static/reader.css">
 </head>
 <body>
-<div id="reader-root">
-  <div id="reader-topbar" hidden>
-    <button id="reader-back">← Library</button>
-    <div id="reader-book-title"></div>
-    <div id="reader-progress-label"></div>
-  </div>
+<div id="reader-root" class="chrome">
   <div id="reader-container"></div>
-  <div id="reader-bottombar" hidden>
-    <button id="btn-toc">☰ TOC</button>
-    <button id="btn-highlights">✎</button>
-    <input id="progress-slider" type="range" min="0" max="100" value="0" step="0.1">
-    <button id="btn-bookmark">🔖</button>
-    <button id="btn-settings">Aa</button>
-  </div>
-  <div id="reader-loading" class="overlay visible">Loading…</div>
-  <div id="reader-settings" hidden>
-    <div>
-      <label>Font size <input id="set-fontsize" type="range" min="60" max="200" value="100"></label>
-      <label>Line height <input id="set-lineheight" type="range" min="1" max="2.2" value="1.6" step="0.05"></label>
-      <label>Theme
-        <select id="set-theme">
-          <option value="dark">Dark</option>
-          <option value="black">Black (OLED)</option>
-          <option value="sepia">Sepia</option>
-          <option value="light">Light</option>
-        </select>
-      </label>
-      <label>Font
-        <select id="set-font">
-          <option value="">Book default</option>
-          <option value="georgia">Georgia (serif)</option>
-          <option value="-apple-system">Sans</option>
-          <option value="ui-monospace">Mono</option>
-        </select>
-      </label>
-      <label>Text color <input id="set-fg" type="color" value="#e8e8ea"></label>
-      <label>Background color <input id="set-bg" type="color" value="#14161a"></label>
+
+  <header id="reader-topbar" class="bar" hidden>
+    <button id="reader-back" class="tb" aria-label="Back to library">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <div class="titles">
+      <div id="reader-book-title"></div>
+      <div id="reader-chapter"></div>
+    </div>
+    <button id="btn-bookmark" class="tb" aria-label="Bookmark this page" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg></button>
+  </header>
+
+  <footer id="reader-bottombar" class="bar" hidden>
+    <div class="scrub">
+      <input id="progress-slider" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position in book">
+      <div class="scrub-labels"><span id="reader-progress-label">0%</span><span id="reader-left"></span></div>
+    </div>
+    <div class="tools">
+      <button id="btn-toc" class="tool"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Contents</span></button>
+      <button id="btn-highlights" class="tool"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Notes</span></button>
+      <button id="btn-settings" class="tool"><span class="aa">Aa</span><span>Text</span></button>
+    </div>
+  </footer>
+
+  <div id="reader-loading" class="overlay visible"><div class="loading-mark"></div>Opening book…</div>
+  <div id="reader-error" class="overlay"><div id="reader-error-msg"></div><a href="/" class="err-back">Back to library</a></div>
+</div>
+
+<!-- contents / notes / bookmarks -->
+<div class="scrim" id="nav-scrim" hidden>
+  <div class="sheet tall" role="dialog" aria-modal="true" aria-label="Contents and notes">
+    <div class="grabber"></div>
+    <div class="tabs" role="tablist">
+      <button data-tab="toc" role="tab">Contents</button>
+      <button data-tab="hl" role="tab">Highlights <span class="n" id="hl-count"></span></button>
+      <button data-tab="bm" role="tab">Bookmarks <span class="n" id="bm-count"></span></button>
+    </div>
+    <div class="sheet-body">
+      <div id="toc-content" data-pane="toc"></div>
+      <div id="hl-content" data-pane="hl"></div>
+      <div id="bm-content" data-pane="bm"></div>
     </div>
   </div>
-  <nav id="toc-panel" hidden>
-    <button class="panel-close" data-panel="toc-panel">✕ Close</button>
-    <div id="toc-content"></div>
-  </nav>
-  <nav id="ann-panel" hidden>
-    <button class="panel-close" data-panel="ann-panel">✕ Close</button>
-    <div id="ann-content"></div>
-  </nav>
-  <div id="reader-error" class="overlay"><div id="reader-error-msg" style="max-width:520px; text-align:center; padding:0 1.2rem;"></div></div>
 </div>
+
+<!-- typography -->
+<div class="scrim clear" id="type-scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Text settings">
+    <div class="grabber"></div>
+    <div class="sheet-body type-body">
+      <div class="size-row">
+        <button id="font-smaller" class="size-btn" aria-label="Smaller text"><span style="font-size:15px">A</span></button>
+        <div class="size-val"><span id="font-size-val">100%</span><small>Text size</small></div>
+        <button id="font-larger" class="size-btn" aria-label="Larger text"><span style="font-size:24px">A</span></button>
+      </div>
+
+      <div class="opt-label">Theme</div>
+      <div class="themes" id="set-theme">
+        <button data-theme="light"><i style="background:#ffffff;color:#222">Aa</i><span>Paper</span></button>
+        <button data-theme="sepia"><i style="background:#f4ecd8;color:#4c3d2e">Aa</i><span>Sepia</span></button>
+        <button data-theme="dark"><i style="background:#14161a;color:#e8e8ea">Aa</i><span>Night</span></button>
+        <button data-theme="black"><i style="background:#000;color:#b8b8b8">Aa</i><span>Black</span></button>
+      </div>
+
+      <div class="opt-label">Font</div>
+      <div class="seg" id="set-font">
+        <button data-font="">Original</button>
+        <button data-font="georgia" style="font-family:Georgia,serif">Serif</button>
+        <button data-font="-apple-system" style="font-family:-apple-system,system-ui,sans-serif">Sans</button>
+      </div>
+
+      <div class="opt-label">Line spacing</div>
+      <div class="seg" id="set-lineheight">
+        <button data-lh="1.35" aria-label="Tight"><svg viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14"/></svg></button>
+        <button data-lh="1.6" aria-label="Normal"><svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h14"/></svg></button>
+        <button data-lh="1.9" aria-label="Loose"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 12h14M5 19h14"/></svg></button>
+      </div>
+
+      <details class="custom">
+        <summary>Custom colours</summary>
+        <div class="colors">
+          <label>Text <input id="set-fg" type="color" value="#e8e8ea"></label>
+          <label>Background <input id="set-bg" type="color" value="#14161a"></label>
+          <button id="reset-colors" class="link">Reset to theme</button>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- note editor -->
+<div class="scrim" id="note-scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Note">
+    <div class="grabber"></div>
+    <form class="sheet-body" id="note-form">
+      <blockquote id="note-quote"></blockquote>
+      <textarea id="note-text" rows="4" placeholder="Write a note…"></textarea>
+      <div class="note-actions">
+        <button type="button" class="btn ghost" id="note-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save note</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
 <script type="module" src="/static/reader.js"></script>
 </body>
 </html>

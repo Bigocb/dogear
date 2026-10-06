@@ -1,5 +1,6 @@
 import '/vendor/view.js'
 import { Overlayer } from '/vendor/overlayer.js'
+import { compare as CFI_compare } from '/vendor/epubcfi.js'
 
 const $ = (sel, el = document) => el.querySelector(sel)
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)]
@@ -100,7 +101,8 @@ async function main() {
   }
 
   view.addEventListener('relocate', e => onRelocate(e.detail))
-  view.addEventListener('load', () => applyTypography())
+  view.addEventListener('load', ({ detail }) => { applyTypography(); wireTaps(detail.doc) })
+  view.addEventListener('show-annotation', e => { annotationTapAt = Date.now(); openHighlight(e.detail.value) })
   view.addEventListener('draw-annotation', e => {
     const { draw, annotation } = e.detail
     const color = HL_COLORS[annotation.color] || HL_COLORS.yellow
@@ -121,17 +123,26 @@ async function main() {
   $('#reader-bottombar').hidden = false
   applyTypography()
   syncSettingsUI()
+  // show the controls briefly so people know they exist, then get out of the way
+  setTimeout(() => { if (!anySheetOpen()) setChrome(false) }, 2500)
 
   // load annotations data
   await Promise.all([loadHighlights(), loadBookmarks()])
 }
 
 // ---- progress ----
-function onRelocate({ cfi, fraction, tocItem, pageItem }) {
+let annotationTapAt = 0
+function onRelocate({ cfi, fraction, tocItem, time }) {
   currentCFI = cfi || ''
   const pct = Math.round((fraction || 0) * 1000) / 10
   $('#progress-slider').value = pct
   $('#reader-progress-label').textContent = `${pct.toFixed(0)}%`
+  const mins = time?.section
+  $('#reader-left').textContent = mins != null && isFinite(mins)
+    ? (mins < 1 ? 'End of chapter' : `${Math.ceil(mins)} min left in chapter`) : ''
+  $('#reader-chapter').textContent = tocItem?.label?.trim() || ''
+  currentTocHref = tocItem?.href || null
+  syncBookmarkButton()
   const now = Date.now()
   if (now - lastSaved > 3000 && currentCFI) {
     lastSaved = now
@@ -140,14 +151,10 @@ function onRelocate({ cfi, fraction, tocItem, pageItem }) {
       body: JSON.stringify({ cfi: currentCFI, percent: pct, device: 'web-pwa' }),
     }).catch(() => {})
   }
-  if (tocItem?.label) {
-    $('#reader-book-title').textContent = `${docTitle} — ${tocItem.label}`
-  } else {
-    $('#reader-book-title').textContent = docTitle
-  }
 }
+let currentTocHref = null
 
-// fetch the book title lazily from the /api/books list
+// fetch the book title for the top bar
 let docTitle = 'Book';
 (async () => {
   try {
@@ -160,91 +167,147 @@ let docTitle = 'Book';
   } catch {}
 })()
 
+function toast(msg) {
+  const t = $('#toast')
+  t.textContent = msg
+  t.hidden = false
+  clearTimeout(toast._t)
+  toast._t = setTimeout(() => { t.hidden = true }, 1800)
+}
+
+// ---- chrome (top/bottom bars) ----
+function setChrome(on) { $('#reader-root').classList.toggle('chrome', on) }
+const chromeOn = () => $('#reader-root').classList.contains('chrome')
+
+// Tap zones inside the book: left third = back, right third = forward, middle = toggle controls.
+function wireTaps(doc) {
+  doc.addEventListener('click', (e) => {
+    if (e.button !== 0 || e.target.closest?.('a[href]')) return
+    const sel = doc.getSelection()
+    if (sel && !sel.isCollapsed) return
+    const frame = doc.defaultView?.frameElement
+    const x = (frame ? frame.getBoundingClientRect().left : 0) + e.clientX
+    setTimeout(() => {
+      if (Date.now() - annotationTapAt < 400) return // tapped a highlight
+      const w = window.innerWidth
+      if (chromeOn() && x > w * 0.25 && x < w * 0.75) return setChrome(false)
+      if (x < w * 0.25) { setChrome(false); view.prev() }
+      else if (x > w * 0.75) { setChrome(false); view.next() }
+      else setChrome(true)
+    }, 0)
+  })
+}
+
+// ---- sheets ----
+function openSheet(id) { setChrome(false); $(id).hidden = false }
+function closeSheet(id) { $(id).hidden = true }
+const anySheetOpen = () => $$('.scrim').some(s => !s.hidden)
+$$('.scrim').forEach(s => s.addEventListener('click', e => { if (e.target === s) closeSheet('#' + s.id) }))
+
 // ---- selection popover ----
+let pendingNote = null // { cfi, text, color } for a new note, or { id } when editing
+
 function wireSelection(foliateView) {
   let selectedText = ''
   let selectedRange = null
-
-  const attachDoc = (doc) => {
-    doc.addEventListener('selectionchange', () => {
-      const sel = doc.getSelection()
-      if (!sel || sel.isCollapsed || !sel.rangeCount) {
-        hidePopover()
-        return
-      }
-      selectedRange = sel.getRangeAt(0)
-      selectedText = sel.toString().trim()
-      if (!selectedText) { hidePopover(); return }
-      showPopover(doc, sel)
-    })
-    // touchend needs slight delay after selectionchange on iOS
-    doc.addEventListener('mouseup', () => setTimeout(checkSel, 30))
-    function checkSel() {
-      const sel = doc.getSelection()
-      if (!sel || sel.isCollapsed) { hidePopover(); return }
-    }
-  }
-
-  foliateView.addEventListener('load', ({ detail }) => attachDoc(detail.doc))
-
-  // iOS: selectionchange fires while dragging handles; debounce
+  let selectedDoc = null
   let debounceTimer = null
-  const origHandler = attachDoc
-  // popover element
+
   const pop = document.createElement('div')
   pop.id = 'selection-popover'
   pop.hidden = true
   pop.innerHTML = `
-    <button data-act="highlight">Highlight</button>
-    <button data-act="note">Note</button>
     <div class="colors">
-      ${Object.entries(HL_COLORS).map(([k, v]) => `<button class="swatch" data-color="${k}" style="background:${v}"></button>`).join('')}
+      ${Object.entries(HL_COLORS).map(([k, v]) => `<button class="swatch" data-color="${k}" style="background:${v}" aria-label="Highlight ${k}"></button>`).join('')}
     </div>
-  `
+    <span class="sep"></span>
+    <button data-act="note">Note</button>
+    <button data-act="copy">Copy</button>`
   document.body.appendChild(pop)
+  const hide = () => { pop.hidden = true }
 
-  window.__showPop = (x, y) => {
-    pop.hidden = false
-    pop.style.left = `${x}px`
-    pop.style.top = `${y}px`
+  // attach to sections loaded from now on, and to the one already on screen
+  // (wireSelection runs after view.init, so its first 'load' event has passed)
+  const attach = (doc) => {
+    if (!doc || doc.__dogearSel) return
+    doc.__dogearSel = true
+    doc.addEventListener('selectionchange', () => {
+      const sel = doc.getSelection()
+      if (!sel || sel.isCollapsed || !sel.rangeCount || !sel.toString().trim()) { clearTimeout(debounceTimer); hide(); return }
+      selectedRange = sel.getRangeAt(0)
+      selectedText = sel.toString().trim()
+      selectedDoc = doc
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        const rect = selectedRange.getBoundingClientRect()
+        const frameRect = doc.defaultView.frameElement.getBoundingClientRect()
+        const half = (pop.offsetWidth || 260) / 2 + 8
+        const x = Math.min(window.innerWidth - half, Math.max(half, frameRect.left + rect.left + rect.width / 2))
+        let y = frameRect.top + rect.top - 10
+        pop.hidden = false
+        if (y - pop.offsetHeight < 8) y = frameRect.top + rect.bottom + pop.offsetHeight + 14 // flip below
+        pop.style.left = `${x}px`
+        pop.style.top = `${y}px`
+      }, 200)
+    })
   }
-  function showPopover(doc, sel) {
-    clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      const rect = sel.getRangeAt(0).getBoundingClientRect()
-      const frameRect = $('#reader-container').getBoundingClientRect()
-      const x = frameRect.left + rect.left + rect.width / 2
-      const y = frameRect.top + rect.top - 8
-      window.__showPop(x, y)
-    }, 150)
-  }
-  function hidePopover() { pop.hidden = true }
+  foliateView.addEventListener('load', ({ detail: { doc } }) => attach(doc))
+  for (const { doc } of foliateView.renderer.getContents?.() || []) attach(doc)
 
   pop.onclick = async (e) => {
-    const { act, color: colorAttr } = e.target.dataset
-    if (!selectedRange) return
-    const color = colorAttr || 'yellow'
-    // CFI for the selection range: anchor via resolveCFI on current index
+    const t = e.target.closest('button')
+    if (!t || !selectedRange) return
     let cfi
-    try {
-      const index = view.lastLocation?.section?.current ?? 0
-      cfi = view.getCFI(index, selectedRange)
-    } catch { return }
-    const doc = view.renderer.getContents().find(x => x.index === (view.lastLocation?.section?.current ?? 0))?.doc
-    if (act === 'highlight' || colorAttr) {
-      await saveHighlight(cfi, selectedText, color, null)
-      view.addAnnotation({ value: cfi, color })
-      doc?.getSelection()?.removeAllRanges()
-      hidePopover()
-    } else if (act === 'note') {
-      const note = prompt('Note:')
-      if (note == null) return
-      await saveHighlight(cfi, selectedText, color, note || null)
-      view.addAnnotation({ value: cfi, color, note })
-      doc?.getSelection()?.removeAllRanges()
-      hidePopover()
+    try { cfi = view.getCFI(view.lastLocation?.section?.current ?? 0, selectedRange) } catch { return }
+    const clear = () => { selectedDoc?.getSelection()?.removeAllRanges(); hide() }
+    if (t.dataset.color) {
+      await saveHighlight(cfi, selectedText, t.dataset.color, null)
+      clear()
+    } else if (t.dataset.act === 'note') {
+      pendingNote = { cfi, text: selectedText, color: 'yellow' }
+      clear()
+      openNoteEditor(selectedText, '')
+    } else if (t.dataset.act === 'copy') {
+      try { await navigator.clipboard.writeText(selectedText); toast('Copied') } catch {}
+      clear()
     }
   }
+}
+
+function openNoteEditor(quote, note) {
+  $('#note-quote').textContent = quote
+  $('#note-text').value = note || ''
+  openSheet('#note-scrim')
+  setTimeout(() => $('#note-text').focus(), 250)
+}
+$('#note-cancel').onclick = () => { pendingNote = null; closeSheet('#note-scrim') }
+$('#note-form').onsubmit = async (e) => {
+  e.preventDefault()
+  const note = $('#note-text').value.trim() || null
+  try {
+    if (pendingNote?.id) {
+      const hl = highlights.find(h => h.id === pendingNote.id)
+      const res = await fetch(`/api/highlights/${pendingNote.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color: hl?.color || 'yellow', note }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      await loadHighlights()
+    } else if (pendingNote) {
+      await saveHighlight(pendingNote.cfi, pendingNote.text, pendingNote.color, note)
+    }
+    toast('Note saved')
+    pendingNote = null
+    closeSheet('#note-scrim')
+  } catch (err) { toast(`Couldn't save: ${err.message}`) }
+}
+
+// tapping a highlight in the text opens its note
+function openHighlight(cfi) {
+  const hl = highlights.find(h => h.cfi === cfi)
+  if (!hl) return
+  pendingNote = { id: hl.id }
+  openNoteEditor(hl.text, hl.note)
 }
 
 async function saveHighlight(cfi, text, color, note) {
@@ -257,44 +320,65 @@ async function saveHighlight(cfi, text, color, note) {
 }
 
 async function loadHighlights() {
+  for (const hl of highlights) { try { view.deleteAnnotation({ value: hl.cfi }) } catch {} }
   highlights = await (await fetch(`/api/books/${bookId}/highlights`)).json()
   for (const hl of highlights) {
     try { view.addAnnotation({ value: hl.cfi, color: hl.color, note: hl.note, id: hl.id }) } catch {}
   }
-  renderHighlightsTab()
+  renderHighlights()
 }
 
 async function loadBookmarks() {
   bookmarks = await (await fetch(`/api/books/${bookId}/bookmarks`)).json()
-  renderHighlightsTab()
+  renderBookmarks()
+  syncBookmarkButton()
 }
 
 // ---- controls ----
-$('#reader-back').onclick = () => { location.href = '/' }
-$('#btn-toc').onclick = () => { togglePanel('toc'); buildToc() }
-$('#btn-highlights').onclick = () => togglePanel('annotations')
-$('#btn-bookmark').onclick = addBookmarkHere
-$('#btn-settings').onclick = () => { $('#reader-settings').hidden = !$('#reader-settings').hidden }
+$('#reader-back').onclick = () => { location.href = '/#library' }
+$('#btn-toc').onclick = () => openNav('toc')
+$('#btn-highlights').onclick = () => openNav(highlights.length || !bookmarks.length ? 'hl' : 'bm')
+$('#btn-bookmark').onclick = toggleBookmark
+$('#btn-settings').onclick = () => openSheet('#type-scrim')
 
 $('#progress-slider').oninput = (e) => {
-  const f = Number(e.target.value) / 100
-  view?.goToFraction(f).catch(() => {})
+  view?.goToFraction(Number(e.target.value) / 100).catch(() => {})
 }
 
-$('#set-fontsize').oninput = e => { cfg.fontsize = Number(e.target.value); saveConfig(); applyTypography() }
-$('#set-lineheight').oninput = e => { cfg.lineheight = Number(e.target.value); saveConfig(); applyTypography() }
-$('#set-theme').onchange = e => {
-  cfg.theme = e.target.value; cfg.fg = ''; cfg.bg = ''; saveConfig()
-  applyConfig(); applyTypography(); syncSettingsUI()
+// ---- typography ----
+const SIZE_STEPS = [70, 80, 90, 100, 110, 120, 135, 150, 170, 200]
+function stepSize(dir) {
+  const i = SIZE_STEPS.findIndex(s => s >= cfg.fontsize)
+  const cur = i === -1 ? SIZE_STEPS.length - 1 : i
+  const next = SIZE_STEPS[Math.min(SIZE_STEPS.length - 1, Math.max(0, cur + dir))]
+  cfg.fontsize = next
+  saveConfig(); applyTypography(); syncSettingsUI()
 }
-$('#set-font').onchange = e => { cfg.font = e.target.value; saveConfig(); applyTypography() }
+$('#font-smaller').onclick = () => stepSize(-1)
+$('#font-larger').onclick = () => stepSize(1)
+$$('#set-theme button').forEach(b => b.onclick = () => {
+  cfg.theme = b.dataset.theme; cfg.fg = ''; cfg.bg = ''
+  saveConfig(); applyConfig(); applyTypography(); syncSettingsUI()
+})
+$$('#set-font button').forEach(b => b.onclick = () => { cfg.font = b.dataset.font; saveConfig(); applyTypography(); syncSettingsUI() })
+$$('#set-lineheight button').forEach(b => b.onclick = () => { cfg.lineheight = Number(b.dataset.lh); saveConfig(); applyTypography(); syncSettingsUI() })
 $('#set-fg').oninput = e => { cfg.fg = e.target.value; saveConfig(); applyTypography() }
 $('#set-bg').oninput = e => { cfg.bg = e.target.value; saveConfig(); applyTypography() }
+$('#reset-colors').onclick = () => { cfg.fg = ''; cfg.bg = ''; saveConfig(); applyTypography(); syncSettingsUI() }
 
 function syncSettingsUI() {
   const { fg, bg } = themeColors()
   $('#set-fg').value = fg
   $('#set-bg').value = bg
+  $('#font-size-val').textContent = `${cfg.fontsize}%`
+  $('#font-smaller').disabled = cfg.fontsize <= SIZE_STEPS[0]
+  $('#font-larger').disabled = cfg.fontsize >= SIZE_STEPS[SIZE_STEPS.length - 1]
+  $$('#set-theme button').forEach(b => b.classList.toggle('on', b.dataset.theme === cfg.theme))
+  $$('#set-font button').forEach(b => b.classList.toggle('on', b.dataset.font === (cfg.font || '')))
+  const lhs = $$('#set-lineheight button').map(b => Number(b.dataset.lh))
+  const nearest = lhs.reduce((a, b) => Math.abs(b - cfg.lineheight) < Math.abs(a - cfg.lineheight) ? b : a)
+  $$('#set-lineheight button').forEach(b => b.classList.toggle('on', Number(b.dataset.lh) === nearest))
+  $('meta[name=theme-color]')?.setAttribute('content', bg)
 }
 
 function applyTypography() {
@@ -309,46 +393,30 @@ function getStyles() {
     html{background:${bg} !important;line-height:${lh} !important}
     body{background:${bg} !important;color:${fg} !important;line-height:${lh} !important;font-size:${base}em !important${font}}
     p,div,span,h1,h2,h3,h4,h5,h6,li,td,blockquote,section,article{color:${fg};font-size:inherit;line-height:${lh} !important}
-    a{color:${cfg.theme === 'dark' || cfg.theme === 'black' ? '#7aa2f7' : '#3a6ea5'}}
+    a{color:${cfg.theme === 'dark' || cfg.theme === 'black' ? '#d1ad66' : '#94682a'}}
   `
 }
 
-// ---- panels ----
-function togglePanel(kind) {
-  const toc = $('#toc-panel'), ann = $('#ann-panel')
-  if (kind === 'toc') {
-    ann.hidden = true
-    toc.hidden = !toc.hidden
-  } else {
-    toc.hidden = true
-    ann.hidden = !ann.hidden
-  }
+// ---- contents / highlights / bookmarks sheet ----
+function openNav(tab) {
+  buildToc()
+  showTab(tab)
+  openSheet('#nav-scrim')
+  if (tab === 'toc') $('#toc-content a.current')?.scrollIntoView({ block: 'center' })
 }
-
-// explicit close buttons in both panels
-$$('.panel-close').forEach(btn => btn.onclick = () => {
-  $('#' + btn.dataset.panel).hidden = true
-})
-
-// backdrop click closes any open panel
-document.addEventListener('click', (e) => {
-  for (const id of ['toc-panel', 'ann-panel']) {
-    const panel = $('#' + id)
-    if (!panel.hidden && !panel.contains(e.target) && !e.target.closest('#btn-toc') && !e.target.closest('#btn-highlights')) {
-      panel.hidden = true
-    }
-  }
-})
+function showTab(tab) {
+  $$('#nav-scrim .tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab))
+  $$('#nav-scrim [data-pane]').forEach(p => { p.hidden = p.dataset.pane !== tab })
+}
+$$('#nav-scrim .tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab))
 
 let tocBuilt = false
-async function buildToc() {
-  if (tocBuilt && $('#toc-panel').hidden) return
-  const panel = $('#toc-panel')
+function buildToc() {
   const content = $('#toc-content')
   if (!tocBuilt) {
     const toc = view?.book?.toc
     if (!toc || !toc.length) {
-      content.innerHTML = '<div class="empty" style="padding:1rem 0; color:var(--muted);">No table of contents</div>'
+      content.innerHTML = '<div class="empty"><b>No contents</b>This book doesn\'t include a table of contents.</div>'
       tocBuilt = true
       return
     }
@@ -357,8 +425,9 @@ async function buildToc() {
       for (const it of items || []) {
         const li = document.createElement('li')
         const a = document.createElement('a')
-        a.textContent = it.label?.trim() || '(untitled)'
-        a.onclick = () => { view.goTo(it.href).catch(() => {}); panel.hidden = true }
+        a.textContent = it.label?.trim() || 'Untitled'
+        a.dataset.href = it.href
+        a.onclick = () => { view.goTo(it.href).catch(() => {}); closeSheet('#nav-scrim') }
         li.appendChild(a)
         if (it.subitems?.length) { const child = document.createElement('ul'); walk(it.subitems, child); li.appendChild(child) }
         parent.appendChild(li)
@@ -369,54 +438,62 @@ async function buildToc() {
     content.appendChild(ul)
     tocBuilt = true
   }
+  $$('#toc-content a').forEach(a => a.classList.toggle('current', !!currentTocHref && a.dataset.href === currentTocHref))
 }
 
-// ---- annotations panel ----
-function renderHighlightsTab() {
-  const panel = $('#ann-panel')
-  if (!panel) return
-  const content = $('#ann-content')
-  const hls = highlights.length
+const ICON_NOTE = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>'
+const ICON_TRASH = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>'
+
+function renderHighlights() {
+  $('#hl-count').textContent = highlights.length || ''
+  $('#hl-content').innerHTML = highlights.length
     ? highlights.map(hl => `
-        <div class="ann-item" style="border-left: 3px solid ${HL_COLORS[hl.color] || '#888'}">
-          <div class="ann-text">${escapeHtml(hl.text.slice(0, 240))}</div>
-          ${hl.note ? `<div class="ann-note">${escapeHtml(hl.note)}</div>` : ''}
-          <div class="ann-actions">
-            <button data-del-hl="${hl.id}">Delete</button>
+        <div class="ann">
+          <button class="ann-go" data-go-hl="${hl.id}">
+            <div class="ann-text" style="--sw:${HL_COLORS[hl.color] || HL_COLORS.yellow}">${escapeHtml(hl.text.slice(0, 280))}</div>
+            ${hl.note ? `<div class="ann-note">${escapeHtml(hl.note)}</div>` : ''}
+          </button>
+          <div class="ann-tools">
+            <button data-note-hl="${hl.id}" aria-label="Edit note">${ICON_NOTE}</button>
+            <button data-del-hl="${hl.id}" aria-label="Delete highlight">${ICON_TRASH}</button>
           </div>
         </div>`).join('')
-    : '<div class="empty">No highlights yet.</div>'
-  const bms = bookmarks.length
+    : '<div class="empty"><b>No highlights yet</b>Select text while reading to highlight it or add a note.</div>'
+}
+
+function renderBookmarks() {
+  $('#bm-count').textContent = bookmarks.length || ''
+  $('#bm-content').innerHTML = bookmarks.length
     ? bookmarks.map(bm => `
-        <div class="ann-item bookmark">
-          <div class="ann-text">${escapeHtml(bm.label || `Bookmark (${(bm.percent || 0).toFixed(0)}%)`)}</div>
-          <div class="ann-actions">
-            <button data-go-bm="${bm.id}">Go</button>
-            <button data-del-bm="${bm.id}">Delete</button>
-          </div>
+        <div class="ann">
+          <button class="ann-go" data-go-bm="${bm.id}">
+            <div class="ann-text">${escapeHtml(bm.label || 'Bookmark')}</div>
+          </button>
+          <div class="ann-tools"><button data-del-bm="${bm.id}" aria-label="Delete bookmark">${ICON_TRASH}</button></div>
         </div>`).join('')
-    : '<div class="empty">No bookmarks yet.</div>'
-  content.innerHTML = `
-    <h3>Highlights <span class="muted">${highlights.length}</span></h3>
-    ${hls}
-    <h3>Bookmarks <span class="muted">${bookmarks.length}</span></h3>
-    ${bms}
-  `
-  content.onclick = async (e) => {
-    const delHl = e.target.dataset.delHl
-    const goBm = e.target.dataset.goBm
-    const delBm = e.target.dataset.delBm
-    if (delHl) {
-      await fetch(`/api/highlights/${delHl}`, { method: 'DELETE' })
-      try { view.deleteAnnotation({ value: highlights.find(h => String(h.id) === String(delHl))?.cfi }) } catch {}
-      await loadHighlights()
-    } else if (goBm) {
-      const bm = bookmarks.find(b => String(b.id) === String(goBm))
-      if (bm) { view.goTo(bm.cfi).catch(() => {}); panel.hidden = true; $('#ann-panel').hidden = true }
-    } else if (delBm) {
-      await fetch(`/api/bookmarks/${delBm}`, { method: 'DELETE' })
-      await loadBookmarks()
-    }
+    : '<div class="empty"><b>No bookmarks yet</b>Tap the bookmark at the top of the page to save your place.</div>'
+}
+
+$('#nav-scrim .sheet-body').onclick = async (e) => {
+  const t = e.target.closest('[data-go-hl],[data-note-hl],[data-del-hl],[data-go-bm],[data-del-bm]')
+  if (!t) return
+  const d = t.dataset
+  if (d.goHl) {
+    const hl = highlights.find(h => String(h.id) === d.goHl)
+    if (hl) { closeSheet('#nav-scrim'); view.goTo(hl.cfi).catch(() => {}) }
+  } else if (d.noteHl) {
+    const hl = highlights.find(h => String(h.id) === d.noteHl)
+    if (hl) { closeSheet('#nav-scrim'); pendingNote = { id: hl.id }; openNoteEditor(hl.text, hl.note) }
+  } else if (d.delHl) {
+    await fetch(`/api/highlights/${d.delHl}`, { method: 'DELETE' })
+    await loadHighlights()
+    toast('Highlight deleted')
+  } else if (d.goBm) {
+    const bm = bookmarks.find(b => String(b.id) === d.goBm)
+    if (bm) { closeSheet('#nav-scrim'); view.goTo(bm.cfi).catch(() => {}) }
+  } else if (d.delBm) {
+    await fetch(`/api/bookmarks/${d.delBm}`, { method: 'DELETE' })
+    await loadBookmarks()
   }
 }
 
@@ -426,15 +503,41 @@ function escapeHtml(s) {
   return d.innerHTML
 }
 
-async function addBookmarkHere() {
+// ---- bookmarks ----
+// a bookmark "covers" the current page if its CFI falls inside the visible range
+function bookmarkHere() {
+  const loc = view?.lastLocation
+  if (!loc?.range || !bookmarks.length) return null
+  const index = loc.section?.current
+  const edge = (atStart) => { const r = loc.range.cloneRange(); r.collapse(atStart); return view.getCFI(index, r) }
+  let start, end
+  try { start = edge(true); end = edge(false) } catch { return null }
+  return bookmarks.find(bm => {
+    try { return CFI_compare(bm.cfi, start) >= 0 && CFI_compare(bm.cfi, end) <= 0 } catch { return false }
+  }) || null
+}
+function syncBookmarkButton() {
+  $('#btn-bookmark').setAttribute('aria-pressed', bookmarkHere() ? 'true' : 'false')
+}
+
+async function toggleBookmark() {
   if (!view || !currentCFI) return
+  const existing = bookmarkHere()
+  if (existing) {
+    await fetch(`/api/bookmarks/${existing.id}`, { method: 'DELETE' })
+    await loadBookmarks()
+    toast('Bookmark removed')
+    return
+  }
   const frac = $('#progress-slider').value / 100
-  const label = `Page ${(frac * 100).toFixed(0)}%`
+  const chapter = $('#reader-chapter').textContent
+  const label = `${chapter ? chapter + ' · ' : ''}${(frac * 100).toFixed(0)}%`
   await fetch(`/api/books/${bookId}/bookmarks`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cfi: currentCFI, label, percent: frac }),
   })
   await loadBookmarks()
+  toast('Page bookmarked')
 }
 
 // ---- reading-time tracking ----
@@ -478,26 +581,14 @@ if (_origNext && _origPrev) {
   view.prev = (...a) => { readTrack.pageTurns++; return _origPrev(...a) }
 }
 
-// ---- gesture nav ----
-let touchStartX = 0
-$('#reader-container').addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX }, { passive: true })
-$('#reader-container').addEventListener('touchend', e => {
-  const dx = e.changedTouches[0].clientX - touchStartX
-  if (Math.abs(dx) > 60) dx < 0 ? view.next() : view.prev()
-}, { passive: true })
-
+// ---- keyboard ----
 document.addEventListener('keydown', e => {
-  if (e.key === 'ArrowRight') view.next()
+  if (e.target.closest?.('input, textarea')) return
+  if (e.key === 'Escape') { const open = $$('.scrim').find(s => !s.hidden); if (open) return closeSheet('#' + open.id); return setChrome(!chromeOn()) }
+  if (anySheetOpen()) return
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); view.next() }
   if (e.key === 'ArrowLeft') view.prev()
 })
-
-let uiVisible = true
-$('#reader-container').addEventListener('dblclick', () => {
-  uiVisible = !uiVisible
-  $('#reader-topbar').hidden = !uiVisible
-  $('#reader-bottombar').hidden = !uiVisible
-})
-
 
 main().then(() => {
   const _n = view.next.bind(view), _p = view.prev.bind(view);

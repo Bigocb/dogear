@@ -3,45 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Dogear — Admin</title>
+<meta name="theme-color" content="#13161c">
+<title>Admin — Dogear</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-<header>
-  <h1>⚙︎ Admin</h1>
-  <nav><a href="/">← Dogear</a></nav>
-</header>
-
+<body class="admin">
 <main id="admin-root">
-  <div class="admin-section">
-    <h2>Users</h2>
+  <div class="admin-top">
+    <a href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Library</a>
+  </div>
+  <header class="page-head"><h1 class="page-title">Admin</h1></header>
+
+  <section class="admin-section">
+    <h2>People</h2>
     <div id="users-list"></div>
-    <form id="user-add-form" style="display:flex; gap:.5rem; margin-top:.8rem; flex-wrap:wrap;">
-      <input class="admin-input" id="nu-username" placeholder="username" required style="width:180px">
-      <input class="admin-input" id="nu-password" type="password" placeholder="password" required style="width:180px">
-      <select class="admin-input" id="nu-role"><option value="user">user</option><option value="admin">admin</option></select>
-      <button type="submit">Add user</button>
+    <form id="user-add-form">
+      <input class="admin-input" id="nu-username" placeholder="Username" autocapitalize="none" autocorrect="off" required>
+      <input class="admin-input" id="nu-password" type="password" placeholder="Password" required>
+      <select class="admin-input" id="nu-role"><option value="user">Reader</option><option value="admin">Admin</option></select>
+      <button type="submit" class="btn primary">Add person</button>
     </form>
-  </div>
+  </section>
 
-  <div class="admin-section">
-    <h2>Metadata</h2>
-    <p class="muted" style="font-size:.85rem">Fetch descriptions, covers, series and publication details for books that are missing them (via Hardcover/OpenLibrary through Shelfmark).</p>
-    <button id="btn-enrich-all">✨ Enrich all missing metadata</button>
-    <div id="enrich-result" class="muted" style="margin-top:.6rem"></div>
-  </div>
+  <section class="admin-section">
+    <h2>Book details</h2>
+    <p class="hint">Look up descriptions, covers, series and publication details for every book that's missing them. Uses Hardcover and Open Library through Shelfmark.</p>
+    <button id="btn-enrich-all" class="btn">Fetch missing details</button>
+    <div id="enrich-result" class="hint" style="margin-top:10px"></div>
+  </section>
 
-  <div class="admin-section">
-    <h2>System status</h2>
+  <section class="admin-section">
+    <h2>System</h2>
     <div id="sys-status"></div>
-  </div>
+  </section>
 
-  <div class="admin-section">
-    <h2>Activity (recent imports & grabs)</h2>
-    <div id="activity-feed" class="act-feed"></div>
-  </div>
+  <section class="admin-section">
+    <h2>Recent activity</h2>
+    <div id="activity-feed"></div>
+  </section>
 </main>
+<div id="toasts" aria-live="polite"></div>
 <script type="module" src="/static/admin.js"></script>
 </body>
 </html>
