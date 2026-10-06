@@ -5,131 +5,153 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dogear</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#14161a">
+<meta name="theme-color" content="#13161c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="icon" href="/static/icon-192.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-<header>
-  <h1>📕 Dogear</h1>
-  <nav>
-    <a href="#" data-view="home" class="active">Home</a>
-    <a href="#" data-filter="">Library</a>
-    <a href="#" data-view="series">Series</a>
-    <a href="#" data-view="stats">Stats</a>
-  </nav>
-  <form id="searchform">
-    <input id="libsearch" placeholder="Search your library…" autocomplete="off">
-    <input id="searchbox" placeholder="Find on Shelfmark…" autocomplete="off">
-    <button type="submit">Search</button>
-  </form>
-  <button id="btn-aa-grab" class="ghost">⬇ Paste AA link</button>
-</header>
+<body class="app">
+
+<!-- primary navigation: bottom tab bar on phones, side rail on wide screens -->
+<nav id="tabbar" aria-label="Main">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Dogear</div>
+  <a href="#" data-view="home" class="active">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V6.5A2.5 2.5 0 0 1 6.5 4H20v13H6.5A2.5 2.5 0 0 0 4 19.5 2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
+    <span>Home</span>
+  </a>
+  <a href="#" data-view="library">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h3v18H5zM10 3h3v18h-3zM15.5 4.2l2.9-.8 4 17.4-2.9.8z"/></svg>
+    <span>Library</span>
+  </a>
+  <a href="#" data-view="find">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <span>Find</span>
+  </a>
+  <a href="#" data-view="stats">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    <span>Stats</span>
+  </a>
+</nav>
 
 <main>
-  <section id="home-view">
-    <div id="home-continue-section" hidden>
-      <h2>📖 Continue</h2>
-      <div class="home-row" id="continue-row"></div>
+
+  <!-- ===== Home ===== -->
+  <section id="home-view" class="view">
+    <header class="page-head">
+      <h1 class="page-title">Good reading</h1>
+      <button class="avatar" data-account aria-label="Account"></button>
+    </header>
+    <div id="home-hero"></div>
+    <div id="home-shelves"></div>
+  </section>
+
+  <!-- ===== Library ===== -->
+  <section id="library-view" class="view" hidden>
+    <header class="page-head">
+      <h1 class="page-title">Library</h1>
+      <button class="avatar" data-account aria-label="Account"></button>
+    </header>
+    <div class="segmented" id="scope-seg" role="tablist">
+      <button data-scope="shelf" class="on" role="tab">My shelf</button>
+      <button data-scope="household" role="tab">Household</button>
     </div>
-    <div id="home-recent-section">
-      <h2>✨ Recently added</h2>
-      <div class="home-row" id="recent-row"></div>
-    </div>
-  </section>
-
-  <section id="series-view" hidden>
-    <h2>Series</h2>
-    <div class="grid" id="series-grid"></div>
-  </section>
-
-  <section id="stats-view" hidden>
-    <h2>Reading stats</h2>
-    <div id="stats-cards" class="stats-grid"></div>
-    <div id="stats-activity"></div>
-  </section>
-
-  <section id="aa-grab-view" hidden>
-    <h2>Grab from Anna's Archive</h2>
-    <p class="muted" style="max-width:560px">Browse annas-archive.gd in your browser, copy the book's URL (or its md5), paste it below with a title.</p>
-    <form id="aa-grab-form">
-      <input id="aa-link" placeholder="https://annas-archive.gd/md5/… or raw md5" autocomplete="off" required>
-      <input id="aa-title" placeholder="Title" required autocomplete="off">
-      <input id="aa-author" placeholder="Author (optional)" autocomplete="off">
-      <button type="submit" id="aa-submit">Download</button>
-    </form>
-    <div id="aa-result" class="muted"></div>
-  </section>
-
-  <section id="library-view" hidden>
-    <div class="view-head">
-      <h2 id="lib-title">My shelf</h2>
-      <button id="hh-toggle" class="hh-toggle">🏠 Household library</button>
-      <form id="filterform" style="display:flex; gap:.4rem;">
-        <a href="#" data-filter="" class="chip active" style="color:var(--fg); text-decoration:none; padding:.2rem .6rem;">All</a>
-        <a href="#" data-filter="wanted" class="chip" style="color:var(--fg); text-decoration:none; padding:.2rem .6rem;">Wanted</a>
-        <a href="#" data-filter="grabbed" class="chip" style="color:var(--fg); text-decoration:none; padding:.2rem .6rem;">Grabbing</a>
-        <a href="#" data-filter="reading" class="chip" style="color:var(--fg); text-decoration:none; padding:.2rem .6rem;">Reading</a>
-        <a href="#" data-filter="read" class="chip" style="color:var(--fg); text-decoration:none; padding:.2rem .6rem;">Read</a>
-      </form>
+    <label class="searchfield">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="libsearch" type="search" placeholder="Search titles and authors" autocomplete="off">
+    </label>
+    <div class="chips" id="filter-chips">
+      <button data-filter="" class="on">All</button>
+      <button data-filter="reading">Reading</button>
+      <button data-filter="imported">Unread</button>
+      <button data-filter="read">Finished</button>
+      <button data-filter="wanted">Wanted</button>
+      <button data-filter="grabbed">Downloading</button>
     </div>
     <div class="grid" id="library-grid"></div>
+    <section id="series-block" hidden>
+      <h2 class="shelf-title">Series</h2>
+      <div id="series-list"></div>
+    </section>
   </section>
-  <section id="results-view" hidden>
-    <div class="view-head">
-      <button id="results-back" class="ghost">← Back</button>
-      <h2>Search results</h2>
-    </div>
+
+  <!-- ===== Find (acquisition) ===== -->
+  <section id="find-view" class="view" hidden>
+    <header class="page-head">
+      <h1 class="page-title">Find a book</h1>
+      <button class="avatar" data-account aria-label="Account"></button>
+    </header>
+    <form id="searchform" class="searchfield big">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="searchbox" type="search" placeholder="Title, author or ISBN" autocomplete="off" enterkeyhint="search">
+      <button type="submit" class="btn primary">Search</button>
+    </form>
+    <p class="hint">Searches Shelfmark. Add a result to your wanted list, then grab it from the book's page.</p>
     <div class="grid" id="results-grid"></div>
+
+    <details id="aa-block" class="panel">
+      <summary>Have an Anna's Archive link?</summary>
+      <form id="aa-grab-form">
+        <label class="field"><span>Link or MD5</span>
+          <input id="aa-link" placeholder="https://annas-archive.org/md5/…" autocomplete="off" required></label>
+        <label class="field"><span>Title</span>
+          <input id="aa-title" autocomplete="off" required></label>
+        <label class="field"><span>Author <em>optional</em></span>
+          <input id="aa-author" autocomplete="off"></label>
+        <button type="submit" id="aa-submit" class="btn primary">Download</button>
+      </form>
+      <div id="aa-result" class="hint"></div>
+    </details>
+  </section>
+
+  <!-- ===== Stats ===== -->
+  <section id="stats-view" class="view" hidden>
+    <header class="page-head">
+      <h1 class="page-title">Reading</h1>
+      <button class="avatar" data-account aria-label="Account"></button>
+    </header>
+    <div id="stats-body"></div>
   </section>
 </main>
 
-<template id="card-tpl">
-  <div class="card">
-    <div class="cover-wrap"><img class="cover" loading="lazy"></div>
-    <div class="meta">
-      <div class="title"></div>
-      <div class="author"></div>
-      <div class="status"></div>
-    </div>
-    <div class="actions"></div>
-  </div>
-</template>
-
-<div id="picker-overlay" hidden>
-  <div id="picker-dialog">
-    <div class="picker-head">
-      <h3 id="picker-title"></h3>
-      <button id="picker-close" class="ghost">✕</button>
-    </div>
-    <p id="picker-book-label" class="muted"></p>
-    <div class="picker-tools">
-      <button id="picker-autopick">✨ Auto-pick best</button>
-      <span id="picker-count" class="muted"></span>
-    </div>
-    <div id="picker-list"></div>
+<!-- book sheet (bottom sheet on phones, dialog on desktop) -->
+<div class="scrim" id="book-scrim" hidden>
+  <div class="sheet" id="book-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="grabber" aria-hidden="true"></div>
+    <div class="sheet-body" id="book-sheet-body"></div>
   </div>
 </div>
 
-<div id="detail-overlay" hidden>
-  <div id="detail-dialog">
-    <button id="detail-close" class="ghost" style="align-self:flex-end">✕</button>
-    <div class="detail-head">
-      <img id="detail-cover" class="detail-cover" alt="">
-      <div class="detail-meta">
-        <h2 id="detail-title"></h2>
-        <div id="detail-author" class="muted"></div>
-        <div id="detail-facts" class="detail-facts"></div>
+<!-- release picker -->
+<div class="scrim" id="picker-scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+    <div class="grabber" aria-hidden="true"></div>
+    <div class="sheet-body">
+      <div class="sheet-head">
+        <div>
+          <h2 id="picker-title" class="sheet-title">Choose a download</h2>
+          <p id="picker-book-label" class="hint"></p>
+        </div>
+        <button class="icon-btn" id="picker-close" aria-label="Close">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
-    </div>
-    <div id="detail-description" class="detail-desc"></div>
-    <div class="detail-actions">
-      <button id="detail-read">📖 Read</button>
-      <button id="detail-enrich" class="ghost">✨ Fetch metadata</button>
+      <div class="picker-tools">
+        <button id="picker-autopick" class="btn primary">Pick the best one for me</button>
+        <span id="picker-count" class="hint"></span>
+      </div>
+      <div id="picker-list"></div>
     </div>
   </div>
 </div>
+
+<!-- account menu -->
+<div class="scrim light" id="account-scrim" hidden>
+  <div class="menu" id="account-menu" role="menu"></div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>
