@@ -17,7 +17,6 @@ function fail(msg) {
 const params = new URLSearchParams(location.search)
 const bookId = Number(params.get('book'))
 let view = null
-let lastSaved = 0
 let highlights = []
 let bookmarks = []
 let currentCFI = ''
@@ -114,6 +113,10 @@ async function main() {
   if (prog.cfi) await view.init({ lastLocation: prog.cfi, showTextStart: false })
   else if (prog.percent > 0) await view.init({ lastLocation: { fraction: prog.percent / 100 }, showTextStart: false })
   else await view.init({ showTextStart: false })
+  // Only now is the reader at the saved spot. Relocations fired while opening
+  // (foliate briefly lands on the first page) must never overwrite progress.
+  savedCFI = prog.cfi || ''
+  restored = true
 
   // wire selection popover
   wireSelection(view)
@@ -143,15 +146,32 @@ function onRelocate({ cfi, fraction, tocItem, time }) {
   $('#reader-chapter').textContent = tocItem?.label?.trim() || ''
   currentTocHref = tocItem?.href || null
   syncBookmarkButton()
-  const now = Date.now()
-  if (now - lastSaved > 3000 && currentCFI) {
-    lastSaved = now
-    fetch(`/api/books/${bookId}/progress`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cfi: currentCFI, percent: pct, device: 'web-pwa' }),
-    }).catch(() => {})
-  }
+  currentPct = pct
+  if (restored) scheduleSave()
 }
+
+// Progress is saved a moment after the reader settles on a page, and flushed
+// when the page is hidden or closed, so the last page read is never dropped.
+let restored = false
+let savedCFI = ''
+let currentPct = 0
+let saveTimer = null
+function scheduleSave() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveProgress, 1500)
+}
+function saveProgress() {
+  clearTimeout(saveTimer)
+  if (!restored || !currentCFI || currentCFI === savedCFI) return
+  savedCFI = currentCFI
+  fetch(`/api/books/${bookId}/progress`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cfi: currentCFI, percent: currentPct, device: 'web-pwa' }),
+    keepalive: true,
+  }).catch(() => { savedCFI = '' })
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress() })
+window.addEventListener('pagehide', saveProgress)
 let currentTocHref = null
 
 // fetch the book title for the top bar
@@ -335,7 +355,7 @@ async function loadBookmarks() {
 }
 
 // ---- controls ----
-$('#reader-back').onclick = () => { location.href = '/#library' }
+$('#reader-back').onclick = () => { saveProgress(); location.href = '/#library' }
 $('#btn-toc').onclick = () => openNav('toc')
 $('#btn-highlights').onclick = () => openNav(highlights.length || !bookmarks.length ? 'hl' : 'bm')
 $('#btn-bookmark').onclick = toggleBookmark
