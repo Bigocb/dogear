@@ -1,0 +1,18 @@
+# build artifacts
+/dogear
+*.exe
+
+# local data / runtime
+*.db
+*.db-shm
+*.db-wal
+/data/
+/staging/
+
+# secrets
+.env
+.env.local
+
+# editor / OS
+.DS_Store
+*.swp

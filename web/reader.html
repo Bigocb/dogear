@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Dogear Reader</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#14161a">
+<link rel="stylesheet" href="/static/reader.css">
+</head>
+<body>
+<div id="reader-root">
+  <div id="reader-topbar" hidden>
+    <button id="reader-back">← Library</button>
+    <div id="reader-book-title"></div>
+    <div id="reader-progress-label"></div>
+  </div>
+  <div id="reader-container"></div>
+  <div id="reader-bottombar" hidden>
+    <button id="btn-toc">☰ TOC</button>
+    <button id="btn-highlights">✎</button>
+    <input id="progress-slider" type="range" min="0" max="100" value="0" step="0.1">
+    <button id="btn-bookmark">🔖</button>
+    <button id="btn-settings">Aa</button>
+  </div>
+  <div id="reader-loading" class="overlay visible">Loading…</div>
+  <div id="reader-settings" hidden>
+    <div>
+      <label>Font size <input id="set-fontsize" type="range" min="60" max="200" value="100"></label>
+      <label>Line height <input id="set-lineheight" type="range" min="1" max="2.2" value="1.6" step="0.05"></label>
+      <label>Theme
+        <select id="set-theme">
+          <option value="dark">Dark</option>
+          <option value="black">Black (OLED)</option>
+          <option value="sepia">Sepia</option>
+          <option value="light">Light</option>
+        </select>
+      </label>
+      <label>Font
+        <select id="set-font">
+          <option value="">Book default</option>
+          <option value="georgia">Georgia (serif)</option>
+          <option value="-apple-system">Sans</option>
+          <option value="ui-monospace">Mono</option>
+        </select>
+      </label>
+      <label>Text color <input id="set-fg" type="color" value="#e8e8ea"></label>
+      <label>Background color <input id="set-bg" type="color" value="#14161a"></label>
+    </div>
+  </div>
+  <nav id="toc-panel" hidden>
+    <button class="panel-close" data-panel="toc-panel">✕ Close</button>
+    <div id="toc-content"></div>
+  </nav>
+  <nav id="ann-panel" hidden>
+    <button class="panel-close" data-panel="ann-panel">✕ Close</button>
+    <div id="ann-content"></div>
+  </nav>
+  <div id="reader-error" class="overlay"><div id="reader-error-msg" style="max-width:520px; text-align:center; padding:0 1.2rem;"></div></div>
+</div>
+<script type="module" src="/static/reader.js"></script>
+</body>
+</html>

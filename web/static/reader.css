@@ -1,0 +1,94 @@
+:root {
+  --bg: #14161a; --fg: #e8e8ea; --muted: #9aa0ab; --card: #1e2127; --accent: #7aa2f7;
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+[data-theme="sepia"] {
+  --bg: #f4ecd8; --fg: #4c3d2e; --muted: #8b7355; --card: #ece1c8; --accent: #a3763a;
+  color-scheme: light;
+}
+[data-theme="light"] {
+  --bg: #ffffff; --fg: #222; --muted: #777; --card: #f2f2f2; --accent: #3a6ea5;
+  color-scheme: light;
+}
+* { box-sizing: border-box; margin: 0; }
+[hidden] { display: none !important; }
+html, body { height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); }
+
+#reader-root { height: 100dvh; display: flex; flex-direction: column; }
+
+#reader-topbar {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .5rem .8rem; font-size: .85rem; color: var(--muted);
+  background: var(--card); flex: 0 0 auto;
+}
+#reader-book-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#reader-container { flex: 1; min-height: 0; }
+#reader-container foliate-view { width: 100%; height: 100%; display: block; }
+
+#reader-bottombar {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem .8rem .8rem; background: var(--card); flex: 0 0 auto;
+}
+#progress-slider { flex: 1; accent-color: var(--accent); }
+
+button {
+  background: #2a2e36; border: 0; color: var(--fg); border-radius: 8px;
+  padding: .4rem .7rem; cursor: pointer; font-size: .85rem;
+}
+#reader-settings {
+  position: fixed; bottom: 60px; right: 12px; background: var(--card);
+  border-radius: 12px; padding: 1rem; display: flex; flex-direction: column; gap: .8rem;
+  box-shadow: 0 8px 30px rgba(0,0,0,.4); z-index: 20;
+}
+#reader-settings label { display: flex; flex-direction: column; gap: .3rem; font-size: .8rem; color: var(--muted); }
+#reader-settings select, #reader-settings input { accent-color: var(--accent); }
+
+#toc-panel {
+  position: fixed; left: 0; top: 0; bottom: 0; width: min(320px, 80vw);
+  background: var(--card); box-shadow: 4px 0 30px rgba(0,0,0,.5);
+  overflow-y: auto; padding: 1rem; z-index: 30;
+}
+#ann-panel {
+  position: fixed; left: 0; top: 0; bottom: 0; width: min(340px, 85vw);
+  background: var(--card); box-shadow: 4px 0 30px rgba(0,0,0,.5);
+  overflow-y: auto; padding: 1rem; z-index: 30;
+}
+#ann-panel h3 { margin: .8rem 0 .5rem; font-size: .95rem; }
+.panel-close {
+  display: block; width: 100%; margin-bottom: .6rem; font-size: .8rem;
+  background: #2a2e36; color: var(--fg);
+}
+.ann-item { background: rgba(127,127,127,.08); border-radius: 8px; padding: .6rem .7rem; margin: .5rem 0; }
+.ann-item.bookmark { border-left: 3px solid var(--accent); }
+.ann-text { font-size: .85rem; line-height: 1.4; }
+.ann-note { font-size: .8rem; color: var(--accent); margin-top: .3rem; font-style: italic; }
+.ann-actions { display: flex; gap: .5rem; margin-top: .4rem; }
+.ann-actions button { font-size: .72rem; padding: .2rem .6rem; }
+
+#selection-popover {
+  position: fixed; transform: translateX(-50%); z-index: 200;
+  background: var(--card); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  display: flex; align-items: center; gap: .4rem; padding: .4rem .5rem;
+}
+#selection-popover button {
+  font-size: .78rem; padding: .3rem .6rem; background: #2a2e36;
+}
+#selection-popover .colors { display: flex; gap: .25rem; padding: 0 .2rem; }
+#selection-popover .swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+#selection-popover .swatch:hover { border-color: var(--fg); }
+
+#toc-panel ul { list-style: none; padding-left: 1rem; }
+#toc-panel > ul { padding-left: 0; }
+#toc-panel li { margin: .3rem 0; }
+#toc-panel a { color: var(--fg); text-decoration: none; font-size: .88rem; display: block; padding: .3rem .4rem; border-radius: 6px; cursor: pointer; }
+#toc-panel a:hover { background: rgba(255,255,255,.06); }
+
+.overlay {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); z-index: 50; color: var(--muted);
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.overlay.visible { opacity: 1; pointer-events: all; }

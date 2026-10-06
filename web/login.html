@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dogear — Sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+<form id="login-form">
+  <h1>📕 Dogear</h1>
+  <p class="muted">Sign in to your shelf</p>
+  <input id="login-username" placeholder="Username" autocomplete="username" required>
+  <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required>
+  <button type="submit">Sign in</button>
+  <div id="login-error" class="error" hidden></div>
+</form>
+<script>
+// tiny DOM helper (this page has no app.js)
+const $ = (sel, el = document) => el.querySelector(sel);
+
+// kill any service worker + caches that could serve stale app code
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+}
+if (window.caches) { caches.keys().then(ks => ks.forEach(k => caches.delete(k))); }
+
+$('#login-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const err = $('#login-error');
+  err.hidden = true;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: $('#login-username').value.trim(),
+        password: $('#login-password').value,
+      }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Login failed');
+    }
+    // verify the session cookie actually sticks before redirecting
+    const me = await fetch('/api/auth/me', { cache: 'no-store' });
+    if (me.ok) {
+      location.href = '/';
+    } else {
+      throw new Error('Session cookie rejected (code ' + me.status + ') — cookie issue');
+    }
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+  }
+};
+</script>
+</body>
+</html>
