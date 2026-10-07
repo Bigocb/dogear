@@ -40,6 +40,7 @@ function fail(msg) {
 const params = new URLSearchParams(location.search)
 const bookId = Number(params.get('book'))
 let view = null
+let isFixed = false
 let highlights = []
 let bookmarks = []
 let currentCFI = ''
@@ -50,8 +51,9 @@ function loadConfig() {
   try { return {
     fontsize: 100, lineheight: 1.6, theme: 'dark', font: '',
     fg: '', bg: '',
+    pdfZoom: 'fit-width',   // fit-width | fit-page | numeric scale
     ...JSON.parse(localStorage.getItem('dogear-reader') || '{}'),
-  } } catch { return { fontsize: 100, lineheight: 1.6, theme: 'dark', font: '', fg: '', bg: '' } }
+  } } catch { return { fontsize: 100, lineheight: 1.6, theme: 'dark', font: '', fg: '', bg: '', pdfZoom: 'fit-width' } }
 }
 function saveConfig() { localStorage.setItem('dogear-reader', JSON.stringify(cfg)) }
 function applyConfig() { document.documentElement.dataset.theme = cfg.theme }
@@ -116,6 +118,11 @@ async function main() {
 
   await foliateView.open(blob)  // Blob path: foliate detects zip/mobi/pdf from bytes
   view = foliateView
+
+  // PDFs (and other fixed-layout books) render as pages: no reflowable text,
+  // so typography controls don't apply. Show page-fit controls instead.
+  isFixed = !!view.isFixedLayout
+  if (isFixed) applyPdfZoom()
 
   // ask the service worker to keep this book for offline use
   if (navigator.serviceWorker?.controller && location.protocol === 'https:') {
@@ -406,10 +413,18 @@ $$('#set-theme button').forEach(b => b.onclick = () => {
 $$('#set-font button').forEach(b => b.onclick = () => { cfg.font = b.dataset.font; saveConfig(); applyTypography(); syncSettingsUI() })
 $$('#set-lineheight button').forEach(b => b.onclick = () => { cfg.lineheight = Number(b.dataset.lh); saveConfig(); applyTypography(); syncSettingsUI() })
 $('#set-fg').oninput = e => { cfg.fg = e.target.value; saveConfig(); applyTypography() }
+$$('#pdf-fit button').forEach(b => b.onclick = () => {
+  cfg.pdfZoom = b.dataset.fit; saveConfig(); applyPdfZoom(); syncSettingsUI()
+})
 $('#set-bg').oninput = e => { cfg.bg = e.target.value; saveConfig(); applyTypography() }
 $('#reset-colors').onclick = () => { cfg.fg = ''; cfg.bg = ''; saveConfig(); applyTypography(); syncSettingsUI() }
 
 function syncSettingsUI() {
+  // PDFs get page-fit controls; reflowable books get typography controls.
+  $('#pdf-controls').hidden = !isFixed
+  $('#reflow-controls').hidden = isFixed
+  $$('#pdf-fit button').forEach(b => b.classList.toggle('on', b.dataset.fit === String(cfg.pdfZoom)))
+
   const { fg, bg } = themeColors()
   $('#set-fg').value = fg
   $('#set-bg').value = bg
@@ -425,7 +440,14 @@ function syncSettingsUI() {
 }
 
 function applyTypography() {
+  if (isFixed) return // fixed-layout (PDF): pages don't reflow
   try { view.renderer.setStyles?.(getStyles()) } catch {}
+}
+
+// apply the PDF page-fit/zoom setting to foliate's fixed-layout renderer
+function applyPdfZoom() {
+  if (!isFixed || !view?.renderer) return
+  try { view.renderer.setAttribute('zoom', String(cfg.pdfZoom)) } catch {}
 }
 function getStyles() {
   const { fg, bg } = themeColors()

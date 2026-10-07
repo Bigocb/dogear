@@ -167,3 +167,18 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 @keyframes pulse { 50% { opacity: .15; } }
 #reader-error-msg { max-width: 480px; line-height: 1.5; color: var(--fg); }
 .err-back { color: var(--accent); font-weight: 600; text-decoration: none; }
+
+/* PDF (fixed-layout) page-fit controls */
+#pdf-fit { display: flex; gap: 8px; flex-wrap: wrap; }
+#pdf-fit button {
+  flex: 1; min-width: 84px; padding: .5rem .4rem; font-size: .82rem;
+  background: var(--board-2, #22262d); color: var(--paper, #e8e8ea);
+  border: 1px solid var(--rule, #2c313a); border-radius: 8px;
+}
+#pdf-fit button.on { background: var(--gilt, #d1ad66); color: #101216; font-weight: 600; border-color: transparent; }
+
+/* darken PDF pages in night themes by inverting the rendered canvas */
+:root[data-theme="dark"] foliate-view::part(filter),
+:root[data-theme="black"] foliate-view::part(filter) {
+  filter: invert(1) hue-rotate(180deg) contrast(0.9) brightness(0.9);
+}

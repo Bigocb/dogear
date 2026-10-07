@@ -63,10 +63,36 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-label="Text settings">
     <div class="grabber"></div>
     <div class="sheet-body type-body">
-      <div class="size-row">
-        <button id="font-smaller" class="size-btn" aria-label="Smaller text"><span style="font-size:15px">A</span></button>
-        <div class="size-val"><span id="font-size-val">100%</span><small>Text size</small></div>
-        <button id="font-larger" class="size-btn" aria-label="Larger text"><span style="font-size:24px">A</span></button>
+      <div id="pdf-controls" hidden>
+        <div class="opt-label">Page fit</div>
+        <div class="seg" id="pdf-fit">
+          <button data-fit="fit-width">Fit width</button>
+          <button data-fit="fit-page">Whole page</button>
+          <button data-fit="1.5">150%</button>
+          <button data-fit="2">200%</button>
+        </div>
+      </div>
+
+      <div id="reflow-controls">
+        <div class="size-row" id="text-controls">
+          <button id="font-smaller" class="size-btn" aria-label="Smaller text"><span style="font-size:15px">A</span></button>
+          <div class="size-val"><span id="font-size-val">100%</span><small>Text size</small></div>
+          <button id="font-larger" class="size-btn" aria-label="Larger text"><span style="font-size:24px">A</span></button>
+        </div>
+
+        <div class="opt-label">Font</div>
+        <div class="seg" id="set-font">
+          <button data-font="">Original</button>
+          <button data-font="georgia" style="font-family:Georgia,serif">Serif</button>
+          <button data-font="-apple-system" style="font-family:-apple-system,system-ui,sans-serif">Sans</button>
+        </div>
+
+        <div class="opt-label">Line spacing</div>
+        <div class="seg" id="set-lineheight">
+          <button data-lh="1.35" aria-label="Tight"><svg viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14"/></svg></button>
+          <button data-lh="1.6" aria-label="Normal"><svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h14"/></svg></button>
+          <button data-lh="1.9" aria-label="Loose"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 12h14M5 19h14"/></svg></button>
+        </div>
       </div>
 
       <div class="opt-label">Theme</div>
@@ -75,20 +101,6 @@
         <button data-theme="sepia"><i style="background:#f4ecd8;color:#4c3d2e">Aa</i><span>Sepia</span></button>
         <button data-theme="dark"><i style="background:#14161a;color:#e8e8ea">Aa</i><span>Night</span></button>
         <button data-theme="black"><i style="background:#000;color:#b8b8b8">Aa</i><span>Black</span></button>
-      </div>
-
-      <div class="opt-label">Font</div>
-      <div class="seg" id="set-font">
-        <button data-font="">Original</button>
-        <button data-font="georgia" style="font-family:Georgia,serif">Serif</button>
-        <button data-font="-apple-system" style="font-family:-apple-system,system-ui,sans-serif">Sans</button>
-      </div>
-
-      <div class="opt-label">Line spacing</div>
-      <div class="seg" id="set-lineheight">
-        <button data-lh="1.35" aria-label="Tight"><svg viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14"/></svg></button>
-        <button data-lh="1.6" aria-label="Normal"><svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h14"/></svg></button>
-        <button data-lh="1.9" aria-label="Loose"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 12h14M5 19h14"/></svg></button>
       </div>
 
       <details class="custom">

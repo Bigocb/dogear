@@ -762,9 +762,11 @@ function openImport() {
 
     <div class="intg">
       <div class="intg-head"><span class="intg-name">Hardcover account</span></div>
+      <p class="hint">Pulls your Hardcover shelves. Safe to run again any time: it only adds books that are new since last time.</p>
       <label class="priv-toggle"><input type="checkbox" id="imp-auto"> <span>Try to download want-to-read books automatically</span></label>
       <label class="priv-toggle"><input type="checkbox" id="imp-read" checked> <span>Include books I've already read</span></label>
       <button class="btn primary" id="imp-hc">Import from Hardcover</button>
+      <button class="btn" id="imp-hc-resync">Resync from Hardcover</button>
       <div class="hint" id="imp-hc-result" style="margin-top:8px"></div>
     </div>
 
@@ -782,13 +784,15 @@ function openImport() {
   const show = (el, res) => {
     $(el).textContent = `Added ${res.added}, matched existing ${res.existing}, skipped ${res.skipped}${res.failed ? `, failed ${res.failed}` : ''}.`;
   };
-  $('#imp-hc').onclick = () => run($('#imp-hc'), async () => {
+  const runHc = (btnId) => run($(btnId), async () => {
     const res = await api('/import/hardcover', { method: 'POST', body: JSON.stringify({
       auto_download: $('#imp-auto').checked, include_read: $('#imp-read').checked,
     })});
     show('#imp-hc-result', res);
     refreshCurrent();
   });
+  $('#imp-hc').onclick = () => runHc('#imp-hc');
+  $('#imp-hc-resync').onclick = () => runHc('#imp-hc-resync');
   $('#imp-csv').onclick = () => run($('#imp-csv'), async () => {
     const file = $('#imp-file').files[0];
     if (!file) { toast('Choose a CSV file first', 'error'); return; }
