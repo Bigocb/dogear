@@ -87,6 +87,18 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #tts-bar.paused .icon-pause { display: none; }
 #tts-bar.paused .icon-play { display: block; }
 
+/* ---------- voice picker ---------- */
+.voice-select {
+  width: 100%; min-height: 44px; padding: 0 12px; margin-top: 4px;
+  border-radius: 11px; border: 1px solid var(--rule);
+  background: var(--raised); color: var(--fg); font: inherit; font-size: .9rem;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.voice-hint { margin: 6px 2px 0; color: var(--muted); font-size: .74rem; line-height: 1.35; }
+
 /* ---------- sheets ---------- */
 .scrim { position: fixed; inset: 0 0 var(--vb) 0; z-index: 40; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; animation: fade .18s ease-out; }
 .scrim.clear { background: rgba(0,0,0,.12); }

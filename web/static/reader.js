@@ -53,8 +53,9 @@ function loadConfig() {
     fontsize: 100, lineheight: 1.6, theme: 'dark', font: '',
     fg: '', bg: '',
     pdfZoom: 'fit-width',   // fit-width | fit-page | numeric scale
+    ttsVoice: 'auto',       // 'auto' | 'dev:<id>' | 'piper:<id>'
     ...JSON.parse(localStorage.getItem('dogear-reader') || '{}'),
-  } } catch { return { fontsize: 100, lineheight: 1.6, theme: 'dark', font: '', fg: '', bg: '', pdfZoom: 'fit-width' } }
+  } } catch { return { fontsize: 100, lineheight: 1.6, theme: 'dark', font: '', fg: '', bg: '', pdfZoom: 'fit-width', ttsVoice: 'auto' } }
 }
 function saveConfig() { localStorage.setItem('dogear-reader', JSON.stringify(cfg)) }
 function applyConfig() { document.documentElement.dataset.theme = cfg.theme }
@@ -159,6 +160,8 @@ async function main() {
   $('#reader-bottombar').hidden = false
   applyTypography()
   syncSettingsUI()
+  // discover self-hosted voices, then refresh the picker when they land
+  loadPiperVoices().then(() => { if ($('#set-voice')) renderVoicePicker() })
   // show the controls briefly so people know they exist, then get out of the way
   setTimeout(() => { if (!anySheetOpen()) setChrome(false) }, 2500)
 
@@ -403,11 +406,18 @@ $('#progress-slider').oninput = (e) => {
 }
 
 // ---- read-aloud (TTS) ----
-// Sentence-level read-aloud: segment the current document into sentences with
-// Intl.Segmenter (via foliate's text walker, which returns DOM Ranges), speak
-// each with the browser SpeechSynthesis, and highlight it in the book overlay.
-const tts = { on: false, paused: false, rate: 1, list: [], i: -1, gen: 0, doc: null, voices: [], errs: 0 }
+// Sentence-level read-aloud. Text is segmented into sentences with
+// Intl.Segmenter (via foliate's text walker, which returns DOM Ranges), then
+// each sentence is spoken either by the browser SpeechSynthesis (device
+// voices) or by the self-hosted Piper engine (nicer, consistent voices).
+const tts = {
+  on: false, paused: false, rate: 1, list: [], i: -1, gen: 0, doc: null, errs: 0,
+  deviceVoices: [], piper: [], piperAvailable: false,
+}
 const TTS_RATES = [0.75, 1, 1.25, 1.5, 2, 2.5, 3]
+const TTS_AUDIO = typeof Audio !== 'undefined' ? new Audio() : null
+let ttsAudioUrl = null
+if (TTS_AUDIO) TTS_AUDIO.preload = 'auto'
 
 function ttsSegments(doc) {
   const lang = doc.documentElement?.lang || 'en'
@@ -452,10 +462,67 @@ function ttsHighlight(range) {
 }
 function clearTTSHighlight() { try { ttsOverlayer()?.remove('__tts__') } catch {} }
 
-function refreshTTSVoices() { tts.voices = speechSynthesis.getVoices?.() || [] }
+function refreshTTSVoices() {
+  tts.deviceVoices = speechSynthesis.getVoices?.() || []
+  if ($('#set-voice')) renderVoicePicker()
+}
 if ('speechSynthesis' in window) {
   refreshTTSVoices()
   speechSynthesis.addEventListener?.('voiceschanged', refreshTTSVoices)
+}
+
+// Fetch the self-hosted Piper voice list once; degrade silently when absent.
+async function loadPiperVoices() {
+  try {
+    const r = await fetch('/api/tts/voices')
+    if (!r.ok) return
+    const d = await r.json()
+    tts.piperAvailable = !!d.available
+    tts.piper = d.voices || []
+  } catch { tts.piperAvailable = false }
+}
+
+// buildVoiceOptions returns select options: device voices first, then Piper.
+function buildVoiceOptions() {
+  const opts = [{ id: 'auto', label: 'Automatic' }]
+  if (tts.deviceVoices.length) {
+    opts.push({ group: 'This device' })
+    for (const v of tts.deviceVoices) {
+      opts.push({ id: 'dev:' + v.voiceURI, label: `${v.name} (${v.lang})` })
+    }
+  }
+  if (tts.piperAvailable && tts.piper.length) {
+    opts.push({ group: 'Dogear voices (self-hosted)' })
+    for (const v of tts.piper) {
+      opts.push({ id: 'piper:' + v.id, label: `${v.name} · ${v.lang}` })
+    }
+  }
+  return opts
+}
+
+// resolveVoice maps the saved selection id to what we actually use.
+function resolveVoice() {
+  const pref = cfg.ttsVoice || 'auto'
+  if (pref.startsWith('piper:')) {
+    const id = pref.slice(6)
+    if (tts.piperAvailable && tts.piper.some(v => v.id === id)) {
+      return { kind: 'piper', id }
+    }
+  }
+  if (pref.startsWith('dev:')) {
+    const uri = pref.slice(4)
+    const v = tts.deviceVoices.find(x => x.voiceURI === uri)
+    if (v) return { kind: 'device', voice: v }
+  }
+  // automatic: prefer a self-hosted voice, else any device voice matching lang
+  const lang = tts.doc?.documentElement?.lang || 'en'
+  if (tts.piperAvailable && tts.piper.length) {
+    const p = tts.piper.find(v => v.lang?.startsWith(lang.slice(0, 2))) || tts.piper[0]
+    return { kind: 'piper', id: p.id }
+  }
+  const dv = tts.deviceVoices.find(x => x.lang === lang) ||
+             tts.deviceVoices.find(x => x.lang?.startsWith(lang.slice(0, 2)))
+  return { kind: 'device', voice: dv || null, id: 'auto' }
 }
 
 function ttsFindStart() {
@@ -474,26 +541,59 @@ function ttsSpeak() {
   const [text, range] = item
   ttsHighlight(range)
   const gen = ++tts.gen
+  const sel = resolveVoice()
+  if (sel.kind === 'piper') speakPiper(text, sel.id, gen)
+  else speakDevice(text, sel.voice, gen)
+}
+
+// speakDevice: browser SpeechSynthesis (device/OS voices).
+function speakDevice(text, voice, gen) {
   const u = new SpeechSynthesisUtterance(text)
   const lang = tts.doc?.documentElement?.lang
   if (lang) u.lang = lang
   u.rate = tts.rate
-  const v = tts.voices.find(x => x.lang === lang) ||
-            tts.voices.find(x => x.lang?.startsWith((lang || 'en').slice(0, 2)))
-  if (v) u.voice = v
+  if (voice) u.voice = voice
   tts.errs = 0
   u.onend = () => { if (gen === tts.gen && tts.on && !tts.paused) { tts.i++; ttsSpeak() } }
   u.onerror = () => {
     if (gen !== tts.gen || !tts.on) return
-    // Engines without a usable voice (some desktops/headless) error out on
-    // every utterance; don't blast through the whole book, just stop.
-    if (++tts.errs >= 3) { stopTTS(); toast('No voice available for read-aloud') ; return }
+    if (++tts.errs >= 3) { stopTTS(); toast('No voice available for read-aloud'); return }
     tts.i++; ttsSpeak()
   }
   try { speechSynthesis.speak(u) } catch {
     if (++tts.errs >= 3) { stopTTS(); toast('No voice available for read-aloud'); return }
     tts.i++; ttsSpeak()
   }
+}
+
+// speakPiper: fetch WAV from the self-hosted engine and play it. A sentence is
+// prefetched while the current one plays so playback stays gapless.
+function ttsPiperUrl(text, voiceId) {
+  const ls = (1 / tts.rate).toFixed(3)
+  return `/api/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(voiceId)}&length_scale=${ls}`
+}
+
+function speakPiper(text, voiceId, gen) {
+  // prefetch the next sentence (best effort, ignored if playback moves on)
+  const nxt = tts.list[tts.i + 1]
+  if (nxt) { try { new Audio(ttsPiperUrl(nxt[0], voiceId)).preload = 'auto' } catch {} }
+  fetch(ttsPiperUrl(text, voiceId))
+    .then(res => { if (!res.ok) throw new Error('tts ' + res.status); return res.blob() })
+    .then(blob => {
+      if (gen !== tts.gen || !tts.on) return
+      if (ttsAudioUrl) URL.revokeObjectURL(ttsAudioUrl)
+      ttsAudioUrl = URL.createObjectURL(blob)
+      TTS_AUDIO.src = ttsAudioUrl
+      TTS_AUDIO.onended = () => { if (gen === tts.gen && tts.on && !tts.paused) { tts.i++; ttsSpeak() } }
+      TTS_AUDIO.onerror = () => { if (gen === tts.gen && tts.on) { stopTTS(); toast('Read-aloud playback failed') } }
+      if (tts.paused) return
+      TTS_AUDIO.play().catch(() => { if (gen === tts.gen) { stopTTS(); toast('Tap Listen again to allow audio') } })
+    })
+    .catch(() => {
+      if (gen !== tts.gen || !tts.on) return
+      if (++tts.errs >= 3) { stopTTS(); toast('Read-aloud engine unavailable'); return }
+      tts.i++; ttsSpeak()
+    })
 }
 
 function ttsNext() {
@@ -517,13 +617,14 @@ function stopTTS() {
   tts.on = false; tts.paused = false
   tts.gen++
   try { speechSynthesis.cancel() } catch {}
+  try { TTS_AUDIO?.pause() } catch {}
   clearTTSHighlight()
   $('#tts-bar').hidden = true
   $('#btn-tts').setAttribute('aria-pressed', 'false')
 }
 
 function startTTS() {
-  if (!('speechSynthesis' in window)) { toast('This browser can’t read aloud'); return }
+  if (!('speechSynthesis' in window) && !tts.piperAvailable) { toast('This browser can’t read aloud'); return }
   if (!ttsEnsure()) { toast('Listen works with reflowable books'); return }
   tts.on = true; tts.paused = false
   tts.i = ttsFindStart()
@@ -538,12 +639,20 @@ function toggleTTS() {
   if (tts.paused) {
     tts.paused = false
     $('#tts-bar').classList.remove('paused')
-    try { speechSynthesis.resume() } catch {}
-    if (!speechSynthesis.speaking) ttsSpeak()
+    const sel = resolveVoice()
+    if (sel.kind === 'piper') {
+      if (TTS_AUDIO?.paused) TTS_AUDIO.play().catch(() => {})
+      else ttsSpeak()
+    } else {
+      try { speechSynthesis.resume() } catch {}
+      if (!speechSynthesis.speaking) ttsSpeak()
+    }
   } else {
     tts.paused = true
     $('#tts-bar').classList.add('paused')
-    try { speechSynthesis.pause() } catch {}
+    const sel = resolveVoice()
+    if (sel.kind === 'piper') { try { TTS_AUDIO?.pause() } catch {} }
+    else { try { speechSynthesis.pause() } catch {} }
   }
 }
 
@@ -605,7 +714,49 @@ function syncSettingsUI() {
   const nearest = lhs.reduce((a, b) => Math.abs(b - cfg.lineheight) < Math.abs(a - cfg.lineheight) ? b : a)
   $$('#set-lineheight button').forEach(b => b.classList.toggle('on', Number(b.dataset.lh) === nearest))
   $('meta[name=theme-color]')?.setAttribute('content', bg)
+  renderVoicePicker()
 }
+
+// renderVoicePicker fills the Reading voice select and its hint. Options merge
+// the device's own voices and the self-hosted Piper voices (grouped).
+function renderVoicePicker() {
+  const sel = $('#set-voice')
+  if (!sel) return
+  const opts = buildVoiceOptions()
+  sel.innerHTML = ''
+  let current = null
+  for (const o of opts) {
+    if (o.group) {
+      const g = document.createElement('optgroup')
+      g.label = o.group
+      sel.appendChild(g)
+      current = g
+    } else {
+      const el = document.createElement('option')
+      el.value = o.id
+      el.textContent = o.label
+      ;(current || sel).appendChild(el)
+    }
+  }
+  // keep the saved choice selectable even if its voice disappeared
+  if (cfg.ttsVoice && !opts.some(o => o.id === cfg.ttsVoice)) {
+    const el = document.createElement('option')
+    el.value = cfg.ttsVoice
+    el.textContent = `${cfg.ttsVoice} (unavailable)`
+    sel.appendChild(el)
+  }
+  sel.value = cfg.ttsVoice || 'auto'
+  const hint = $('#voice-hint')
+  if (hint) {
+    const rv = resolveVoice()
+    hint.textContent = !tts.piperAvailable
+      ? 'Using your device’s voices. Self-hosted voices are offline right now.'
+      : rv.kind === 'piper'
+        ? 'Self-hosted neural voice — natural and private.'
+        : 'Using a voice built into this device.'
+  }
+}
+$('#set-voice').onchange = e => { cfg.ttsVoice = e.target.value; saveConfig(); renderVoicePicker() }
 
 function applyTypography() {
   if (isFixed) return // fixed-layout (PDF): pages don't reflow

@@ -53,6 +53,7 @@ const (
 	cfgAAKey       = "aa_donator_key"
 	cfgAABaseURL   = "aa_base_url"
 	cfgSourceOrder = "release_source_order"
+	cfgTTSUrl      = "tts_url"
 )
 
 // Settings holds the resolved integration configuration.
@@ -63,6 +64,7 @@ type Settings struct {
 	AAKeySet        bool   `json:"aa_donator_key_set"`
 	AABaseURL       string `json:"aa_base_url"`
 	HardcoverSet    bool   `json:"hardcover_token_set"`
+	TTSUrl          string `json:"tts_url"`
 }
 
 func (s *Store) settings() Settings {
@@ -73,6 +75,7 @@ func (s *Store) settings() Settings {
 		AAKeySet:        s.config(cfgAAKey, "AA_DONATOR_KEY", "") != "",
 		AABaseURL:       s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd"),
 		HardcoverSet:    s.config(cfgHardcoverToken, "", "") != "",
+		TTSUrl:          s.config(cfgTTSUrl, "DOGEAR_TTS_URL", "http://dogear-tts:8097"),
 	}
 }
 
@@ -84,4 +87,7 @@ func (s *Store) prowlarrEnabled() bool {
 func (s *Store) aaKey() string { return s.config(cfgAAKey, "AA_DONATOR_KEY", "") }
 func (s *Store) aaBaseURL() string {
 	return s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd")
+}
+func (s *Store) ttsURL() string {
+	return strings.TrimRight(s.config(cfgTTSUrl, "DOGEAR_TTS_URL", "http://dogear-tts:8097"), "/")
 }

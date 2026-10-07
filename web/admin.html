@@ -70,6 +70,21 @@
   </section>
 
   <section class="admin-section">
+    <h2>Read-aloud</h2>
+    <p class="hint">Self-hosted neural voice engine (Piper). Gives everyone a natural, consistent voice while reading, even offline. Defaults to the bundled <code>dogear-tts</code> service.</p>
+    <div class="intg" id="intg-tts">
+      <div class="intg-head">
+        <span class="intg-name">Piper voice engine</span>
+        <span class="intg-state" id="tts-state"></span>
+      </div>
+      <label class="field"><span>Engine URL</span>
+        <input class="admin-input" id="tts-url" placeholder="http://dogear-tts:8097" autocapitalize="none" autocorrect="off"></label>
+      <button class="btn" data-test="tts">Test connection</button>
+      <span class="test-out hint" id="tts-test"></span>
+    </div>
+  </section>
+
+  <section class="admin-section">
     <h2>Wanted list</h2>
     <p class="hint">Dogear retries every wanted book on a schedule and downloads the best copy it can find. Turn auto-download off per book in its details.</p>
     <div id="wanted-watch"></div>

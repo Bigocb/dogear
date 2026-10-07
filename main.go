@@ -1759,6 +1759,9 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if v, ok := str("aa_base_url"); ok {
 			set(cfgAABaseURL, v)
 		}
+		if v, ok := str("tts_url"); ok {
+			set(cfgTTSUrl, v)
+		}
 		if v, ok := body["prowlarr_enabled"]; ok {
 			b, _ := v.(bool)
 			if b {
@@ -1826,6 +1829,24 @@ func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": "Key accepted"})
+	case "tts":
+		base := a.store.ttsURL()
+		resp, err := a.ttsClient().Get(base + "/health")
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
+			return
+		}
+		var h struct {
+			OK     bool `json:"ok"`
+			Voices int  `json:"voices"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&h)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("engine up · %d voices", h.Voices)})
 	default:
 		writeErr(w, http.StatusNotFound, "unknown service")
 	}
@@ -1954,6 +1975,57 @@ func (a *apiServer) handleContent(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	w.Header().Set("Content-Type", epubMIME(filepath.Ext(path)))
 	http.ServeContent(w, r, filepath.Base(path), modTime(path), f)
+}
+
+// ---- read-aloud (self-hosted Piper) proxy ----
+//
+// The dogear-tts service speaks the Wyoming-free HTTP API defined in tts/app.py.
+// Dogear proxies it so the browser stays same-origin (no CORS, no extra port
+// exposed) and the engine URL stays a server-side setting.
+
+func (a *apiServer) ttsClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second}
+}
+
+// handleTTSVoices lists self-hosted voices plus whether the engine is up.
+func (a *apiServer) handleTTSVoices(w http.ResponseWriter, r *http.Request) {
+	base := a.store.ttsURL()
+	resp, err := a.ttsClient().Get(base + "/voices")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "voices": []any{}})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "voices": []any{}})
+		return
+	}
+	var out struct {
+		Voices []map[string]any `json:"voices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Voices == nil {
+		out.Voices = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"available": true, "voices": out.Voices})
+}
+
+// handleTTS proxies synthesis to the self-hosted engine and streams WAV back.
+func (a *apiServer) handleTTS(w http.ResponseWriter, r *http.Request) {
+	base := a.store.ttsURL()
+	resp, err := a.ttsClient().Get(base + "/tts?" + r.URL.RawQuery)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "read-aloud engine unavailable")
+		return
+	}
+	defer resp.Body.Close()
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func epubMIME(ext string) string {
@@ -2351,6 +2423,8 @@ func main() {
 	mux.HandleFunc("GET /api/search", api.requireUser(api.handleSearch))
 	mux.HandleFunc("GET /api/covers/{id}", api.requireUser(api.handleCover))
 	mux.HandleFunc("GET /api/books/{id}/content", api.requireUser(api.handleContent))
+	mux.HandleFunc("GET /api/tts/voices", api.requireUser(api.handleTTSVoices))
+	mux.HandleFunc("GET /api/tts", api.requireUser(api.handleTTS))
 	mux.HandleFunc("POST /api/aa-grab", api.requireUser(api.handleAAGrab))
 	mux.HandleFunc("GET /api/series-group", api.requireUser(api.handleSeriesGrouping))
 	mux.HandleFunc("GET /api/home", api.requireUser(api.handleHome))

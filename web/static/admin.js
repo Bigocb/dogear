@@ -185,6 +185,10 @@ async function loadSettings() {
   $('#hardcover-token').placeholder = s.hardcover_token_set ? '•••••• (set — leave blank to keep)' : 'optional';
   $('#hardcover-state').textContent = s.hardcover_token_set ? 'Set' : 'Using Open Library';
   $('#hardcover-state').className = 'intg-state ' + (s.hardcover_token_set ? 'status-ok' : '');
+
+  $('#tts-url').value = s.tts_url || '';
+  $('#tts-state').textContent = s.tts_url ? 'Ready' : 'Not configured';
+  $('#tts-state').className = 'intg-state ' + (s.tts_url ? 'status-ok' : '');
 }
 
 $('#save-settings').onclick = async (e) => {
@@ -195,6 +199,7 @@ $('#save-settings').onclick = async (e) => {
       prowlarr_enabled: $('#prowlarr-enabled').checked,
       prowlarr_url: $('#prowlarr-url').value.trim(),
       aa_base_url: $('#aa-base').value.trim(),
+      tts_url: $('#tts-url').value.trim(),
     };
     // only send secrets when typed, so blank leaves them untouched
     if ($('#prowlarr-key').value) body.prowlarr_api_key = $('#prowlarr-key').value.trim();
