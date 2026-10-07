@@ -19,6 +19,8 @@
  * @licend The above is the entire license notice for the
  * JavaScript code in this page
  */
+if(!Uint8Array.prototype.toHex){Object.defineProperty(Uint8Array.prototype,"toHex",{value:function(){let s="";for(let i=0;i<this.length;i++)s+=this[i].toString(16).padStart(2,"0");return s},writable:true,configurable:true,enumerable:false})}if(!Map.prototype.getOrInsertComputed){Object.defineProperty(Map.prototype,"getOrInsertComputed",{value:function(k,fn){let v=this.get(k);if(v===undefined){v=fn(k);this.set(k,v)}return v},writable:true,configurable:true,enumerable:false})}if(!Map.prototype.getOrInsert){Object.defineProperty(Map.prototype,"getOrInsert",{value:function(k,d){let v=this.get(k);if(v===undefined){v=d;this.set(k,v)}return v},writable:true,configurable:true,enumerable:false})}if(!Set.prototype.getOrInsertComputed){Object.defineProperty(Set.prototype,"getOrInsertComputed",{value:function(k,fn){if(!this.has(k)){fn(k);this.add(k)}return k},writable:true,configurable:true,enumerable:false})}
+if(!Uint8Array.prototype.toHex){Object.defineProperty(Uint8Array.prototype,"toHex",{value:function(){let s="";for(let i=0;i<this.length;i++)s+=this[i].toString(16).padStart(2,"0");return s},writable:true,configurable:true,enumerable:false})}
 
 /**
  * pdfjsVersion = 5.5.207

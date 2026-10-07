@@ -470,7 +470,7 @@ func (a *apiServer) handleEnrich(w http.ResponseWriter, r *http.Request) {
 	if book.Author != "" {
 		query += " " + book.Author
 	}
-	detail, err := a.sm.EnrichSearch(r.Context(), query, book.Author)
+	detail, err := a.enrichLookup(r.Context(), query, book)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "enrich lookup: "+err.Error())
 		return
@@ -485,6 +485,38 @@ func (a *apiServer) handleEnrich(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := a.store.getBook(id)
 	writeJSON(w, http.StatusOK, b)
+}
+
+// enrichLookup finds metadata for a book: OpenLibrary (keyless) first, then
+// Shelfmark's richer providers (Hardcover) when configured.
+func (a *apiServer) enrichLookup(ctx context.Context, query string, book *Book) (*MetaDetail, error) {
+	if a.openlibrary != nil {
+		results, err := a.openlibrary.Search(ctx, query)
+		if err == nil && len(results) > 0 {
+			// choose the best title/author overlap
+			best := results[0]
+			for _, r := range results {
+				if book.Author != "" && strings.Contains(strings.ToLower(r.Author), strings.ToLower(book.Author)) {
+					best = r
+					break
+				}
+			}
+			if d, err := a.openlibrary.Detail(ctx, best.BookID); err == nil && d != nil {
+				if d.Description == "" {
+					d.Description = ""
+				}
+				return d, nil
+			}
+		}
+	}
+	if a.sm != nil {
+		d, err := a.sm.EnrichSearch(ctx, query, book.Author)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
+	}
+	return nil, nil
 }
 
 // enrichJob tracks a running batch enrichment.
@@ -527,10 +559,10 @@ func (a *apiServer) handleEnrichBatch(w http.ResponseWriter, r *http.Request) {
 			if b.Author != "" {
 				query += " " + b.Author
 			}
-			detail, err := a.sm.EnrichSearch(context.Background(), query, b.Author)
+			detail, err := a.enrichLookup(context.Background(), query, &b)
 			if err != nil || detail == nil {
 				// retry once with title only
-				if detail2, err2 := a.sm.EnrichSearch(context.Background(), b.Title, ""); err2 == nil && detail2 != nil {
+				if detail2, err2 := a.enrichLookup(context.Background(), b.Title, &b); err2 == nil && detail2 != nil {
 					detail = detail2
 				} else {
 					currentEnrich.Failed++
@@ -781,12 +813,13 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 }
 
 type apiServer struct {
-	store    *Store
-	sm       *Shelfmark
-	aa       *AAGrabber
-	prowlarr *Prowlarr
-	libgen   *Libgen
-	importer *Importer
+	store       *Store
+	sm          *Shelfmark
+	aa          *AAGrabber
+	prowlarr    *Prowlarr
+	libgen      *Libgen
+	openlibrary *OpenLibrary
+	importer    *Importer
 }
 
 func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
@@ -1109,40 +1142,27 @@ func (a *apiServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing q")
 		return
 	}
-	raw, err := a.sm.SearchMetadata(r.Context(), q)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "shelfmark search: "+err.Error())
-		return
+	var results []MetadataResult
+	// Primary: OpenLibrary (keyless, works with zero config).
+	if ol, err := a.openlibrary.Search(r.Context(), q); err == nil {
+		results = append(results, ol...)
 	}
-	// map to a UI-friendly shape
-	type result struct {
-		Provider string  `json:"provider"`
-		BookID   string  `json:"book_id"`
-		Title    string  `json:"title"`
-		Author   string  `json:"author"`
-		ISBN     string  `json:"isbn"`
-		CoverURL *string `json:"cover_url"`
-	}
-	results := make([]result, 0, len(raw))
-	for _, m := range raw {
-		var cov *string
-		if m.CoverURL != nil && *m.CoverURL != "" {
-			// stash the shelfmark cover path; the UI proxies via
-			// /api/covers?src=<shelfmark-path>
-			full := *m.CoverURL
-			if strings.HasPrefix(full, "/") {
-				full = "/api/shelfmark-cover?path=" + url.QueryEscape(full)
+	// Optional: Shelfmark metadata adds Hardcover/GB (richer series data).
+	if a.sm != nil && a.store.config(cfgShelfmarkURL, "SHELFMARK_URL", "") != "" {
+		if raw, err := a.sm.SearchMetadata(r.Context(), q); err == nil {
+			for _, m := range raw {
+				var cov *string
+				if m.CoverURL != nil && *m.CoverURL != "" {
+					full := *m.CoverURL
+					if strings.HasPrefix(full, "/") {
+						full = "/api/shelfmark-cover?path=" + url.QueryEscape(full)
+					}
+					cov = &full
+				}
+				m.CoverURL = cov
+				results = append(results, m)
 			}
-			cov = &full
 		}
-		results = append(results, result{
-			Provider: m.Provider,
-			BookID:   m.BookID,
-			Title:    m.Title,
-			Author:   m.Author(),
-			ISBN:     m.FullISBN(),
-			CoverURL: cov,
-		})
 	}
 	writeJSON(w, http.StatusOK, results)
 }
@@ -1990,6 +2010,7 @@ func main() {
 	api.aa.store = store // so settings can override env later
 	api.prowlarr = NewProwlarr(store, log.New(os.Stderr, "dogear/prowlarr ", log.LstdFlags))
 	api.libgen = NewLibgen(nil, log.New(os.Stderr, "dogear/libgen ", log.LstdFlags))
+	api.openlibrary = NewOpenLibrary(log.New(os.Stderr, "dogear/openlibrary ", log.LstdFlags))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("dogear listening on %s (db=%s shelfmark=%s library=%s ingests=%v copy=%v)", addr, dbPath, smURL, libraryPath, ingests, copyMode)

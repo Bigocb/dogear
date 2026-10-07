@@ -2,6 +2,29 @@ import '/vendor/view.js'
 import { Overlayer } from '/vendor/overlayer.js'
 import { compare as CFI_compare } from '/vendor/epubcfi.js'
 
+// pdf.js v5 uses Uint8Array.prototype.toHex (a TC39 proposal not yet shipped
+// in most browsers). Polyfill it so PDF books open.
+if (!Uint8Array.prototype.toHex) {
+  Object.defineProperty(Uint8Array.prototype, 'toHex', {
+    value: function () {
+      let s = ''
+      for (let i = 0; i < this.length; i++) s += this[i].toString(16).padStart(2, '0')
+      return s
+    },
+    writable: true, configurable: true, enumerable: false,
+  })
+}
+if (!Uint8Array.prototype.toBase64) {
+  Object.defineProperty(Uint8Array.prototype, 'toBase64', {
+    value: function () {
+      let bin = ''
+      for (let i = 0; i < this.length; i++) bin += String.fromCharCode(this[i])
+      return btoa(bin)
+    },
+    writable: true, configurable: true, enumerable: false,
+  })
+}
+
 const $ = (sel, el = document) => el.querySelector(sel)
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)]
 

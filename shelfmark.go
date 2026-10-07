@@ -34,8 +34,8 @@ type Release struct {
 	Extra       map[string]any `json:"extra"`
 }
 
-// MetadataResult is one search hit from Shelfmark's metadata providers.
-type MetadataResult struct {
+// smBook is Shelfmark's raw metadata hit shape.
+type smBook struct {
 	Provider string   `json:"provider"`
 	BookID   string   `json:"provider_id"`
 	Title    string   `json:"title"`
@@ -45,16 +45,14 @@ type MetadataResult struct {
 	CoverURL *string  `json:"cover_url"`
 }
 
-// Author returns the first author or "".
-func (m MetadataResult) Author() string {
+func (m smBook) author() string {
 	if len(m.Authors) > 0 {
 		return m.Authors[0]
 	}
 	return ""
 }
 
-// FullISBN prefers isbn13 then isbn10.
-func (m MetadataResult) FullISBN() string {
+func (m smBook) fullISBN() string {
 	if m.ISBN13 != nil && *m.ISBN13 != "" {
 		return *m.ISBN13
 	}
@@ -155,14 +153,21 @@ func (s *Shelfmark) getJSON(ctx context.Context, path string, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-func (s *Shelfmark) SearchMetadata(ctx context.Context, query string) ([]MetadataResult, error) {
+func (s *Shelfmark) SearchMetadata(ctx context.Context, query string) ([]MetaResult, error) {
 	var out struct {
-		Books []MetadataResult `json:"books"`
+		Books []smBook `json:"books"`
 	}
 	if err := s.getJSON(ctx, "/api/metadata/search?query="+url.QueryEscape(query), &out); err != nil {
 		return nil, err
 	}
-	return out.Books, nil
+	res := make([]MetaResult, 0, len(out.Books))
+	for _, b := range out.Books {
+		res = append(res, MetaResult{
+			Provider: b.Provider, BookID: b.BookID, Title: b.Title,
+			Author: b.author(), ISBN: b.fullISBN(), CoverURL: b.CoverURL,
+		})
+	}
+	return res, nil
 }
 
 func (s *Shelfmark) SearchReleases(ctx context.Context, provider, bookID string) ([]Release, error) {
