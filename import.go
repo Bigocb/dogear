@@ -292,6 +292,15 @@ func (im *Importer) storeRecord(book *Book, path, format string, size int64, cov
 		id, path, format, size, now); err != nil {
 		return 0, err
 	}
+	// A recorded file means the download finished: close any outstanding grabs
+	// so the UI stops showing the book as still downloading.
+	if _, err := im.store.db.Exec(`UPDATE grabs SET state='done' WHERE book_id=? AND state!='done'`, id); err != nil {
+		return id, err
+	}
+	// Personal-first: a finished download belongs on its owner's shelf.
+	if owner := im.store.ownerOf(id); owner != 0 {
+		_ = im.store.shelfAdd(owner, id, "imported")
+	}
 	return id, nil
 }
 

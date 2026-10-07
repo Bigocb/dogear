@@ -212,6 +212,37 @@ func (s *Store) backfillCovers() (int, error) {
 	return fixed, nil
 }
 
+// reconcileFiles repairs books that have a file on disk but whose status or
+// grabs were left stale (older import paths that attached a file without
+// flipping the book out of 'wanted'). Idempotent; safe to run at every start.
+func (s *Store) reconcileFiles() (int, error) {
+	res, err := s.db.Exec(`
+		UPDATE books SET status='imported', updated_at=strftime('%s','now')
+		WHERE status IN ('wanted','grabbed')
+		  AND EXISTS (SELECT 1 FROM files f WHERE f.book_id = books.id)`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if _, err := s.db.Exec(`
+		UPDATE grabs SET state='done'
+		WHERE state!='done' AND EXISTS (SELECT 1 FROM files f WHERE f.book_id = grabs.book_id)`); err != nil {
+		return int(n), err
+	}
+	// Put file-backed books onto their owner's shelf (never downgrades a book
+	// the owner has already progressed past 'imported').
+	if _, err := s.db.Exec(`
+		INSERT INTO user_books(user_id, book_id, status, hidden, added_at)
+		SELECT b.owner_id, b.id, 'imported', 0, strftime('%s','now')
+		FROM books b
+		WHERE b.owner_id IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM files f WHERE f.book_id = b.id)
+		ON CONFLICT(user_id, book_id) DO NOTHING`); err != nil {
+		return int(n), err
+	}
+	return int(n), nil
+}
+
 // migrateMeta adds optional metadata-enrichment columns to books.
 func (s *Store) migrateMeta() error {
 	cols := []struct{ name, def string }{
@@ -379,6 +410,13 @@ func (s *Store) addBook(b *Book) (int64, error) {
 }
 
 func (s *Store) setStatus(id int64, status string) error {
+	// A book with a file on disk is, by definition, no longer "wanted" or
+	// "downloading". Without this guard a late grab-flow write (or a manual
+	// mark) could hide a finished download from the shelf. reading/read still
+	// win, so this only blocks the two pre-download states.
+	if (status == "wanted" || status == "grabbed") && s.hasFiles(id) {
+		return nil
+	}
 	res, err := s.db.Exec(`UPDATE books SET status=?, updated_at=? WHERE id=?`, status, time.Now().Unix(), id)
 	if err != nil {
 		return err
@@ -2246,6 +2284,12 @@ func main() {
 		log.Printf("cover backfill: %v", err)
 	} else if n > 0 {
 		log.Printf("cover backfill: linked %d missing covers", n)
+	}
+	// repair books whose file landed but status/grabs stayed stale
+	if n, err := store.reconcileFiles(); err != nil {
+		log.Printf("file reconcile: %v", err)
+	} else if n > 0 {
+		log.Printf("file reconcile: %d file-backed books restored to 'imported'", n)
 	}
 
 	api := &apiServer{store: store}
