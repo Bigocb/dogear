@@ -112,7 +112,7 @@ func (a *apiServer) handleLibgenGrab(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.setStatus(id, "grabbed")
 	_ = a.store.addGrab(id, "libgen:"+body.MD5, "queued")
 
-	dest, err := a.aaDownloadAndImport(r.Context(), strings.ToLower(body.MD5), title, author)
+	dest, via, err := a.libgenDownloadAndImport(r.Context(), strings.ToLower(body.MD5), title, author)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -124,5 +124,5 @@ func (a *apiServer) handleLibgenGrab(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.setStatus(id, "imported")
 	b, _ := a.store.getBook(id)
-	writeJSON(w, http.StatusOK, map[string]any{"book": b, "file": dest})
+	writeJSON(w, http.StatusOK, map[string]any{"book": b, "file": dest, "via": via})
 }

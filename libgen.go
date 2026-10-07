@@ -7,10 +7,14 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
+
+const lgUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 
 // Libgen searches Library Genesis (a fork mirror that exposes md5s) and returns
 // releases whose ID is the file md5. Those md5s are shared with Anna's Archive,
@@ -140,4 +144,112 @@ func (l *Libgen) searchMirror(ctx context.Context, base, query string) ([]Releas
 		})
 	}
 	return out, nil
+}
+
+// resolveDirectLink scrapes the keyed get.php link from libgen's ads.php page.
+func (l *Libgen) resolveDirectLink(ctx context.Context, base, md5 string) (string, error) {
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, base+"/ads.php?md5="+md5, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", lgUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("libgen ads %d", resp.StatusCode)
+	}
+	m := regexp.MustCompile(`get\.php\?md5=[a-f0-9]{32}&key=[A-Za-z0-9]+`).FindString(string(body))
+	if m == "" {
+		return "", fmt.Errorf("no download link on libgen page")
+	}
+	if strings.HasPrefix(m, "http") {
+		return m, nil
+	}
+	return base + "/" + m, nil
+}
+
+// Download fetches the file directly from libgen (no AA key needed). libgen's
+// DB is frequently overloaded, so this validates the response is a real file,
+// bounds each attempt with a timeout, and returns an error otherwise so the
+// caller can fall back to AA.
+func (l *Libgen) Download(ctx context.Context, md5, destDir, baseName string) (string, error) {
+	var lastErr error
+	for _, base := range l.mirrors {
+		link, err := l.resolveDirectLink(ctx, base, md5)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for attempt := 0; attempt < 2; attempt++ {
+			// bound each download attempt so a stalled libgen never blocks the
+			// caller's fallback path
+			actx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			req, err := http.NewRequestWithContext(actx, http.MethodGet, link, nil)
+			if err != nil {
+				cancel()
+				lastErr = err
+				break
+			}
+			req.Header.Set("User-Agent", lgUA)
+			req.Header.Set("Referer", base+"/ads.php?md5="+md5)
+			resp, err := l.client.Do(req)
+			if err != nil {
+				cancel()
+				lastErr = err
+				continue
+			}
+			ct := resp.Header.Get("Content-Type")
+			cd := resp.Header.Get("Content-Disposition")
+			if strings.Contains(ct, "text/html") && resp.StatusCode >= 400 {
+				resp.Body.Close()
+				cancel()
+				lastErr = fmt.Errorf("libgen %s: HTTP %d (overloaded?)", base, resp.StatusCode)
+				continue
+			}
+			name := baseName
+			if m := regexp.MustCompile(`filename="?([^";]+)"?`).FindStringSubmatch(cd); m != nil {
+				name = m[1]
+			}
+			ext := strings.ToLower(filepath.Ext(name))
+			if !bookExts[ext] {
+				ext = ".epub"
+				name = strings.TrimSuffix(name, filepath.Ext(name)) + ext
+			}
+			if err := os.MkdirAll(destDir, 0o775); err != nil {
+				resp.Body.Close()
+				cancel()
+				return "", err
+			}
+			dest := filepath.Join(destDir, sanitize(strings.TrimSuffix(name, ext))+ext)
+			out, err := os.Create(dest)
+			if err != nil {
+				resp.Body.Close()
+				cancel()
+				return "", err
+			}
+			size, cerr := io.Copy(out, resp.Body)
+			out.Close()
+			resp.Body.Close()
+			cancel()
+			if cerr != nil || size < 1000 {
+				os.Remove(dest)
+				lastErr = fmt.Errorf("libgen %s: short/empty download", base)
+				continue
+			}
+			l.log.Printf("libgen direct download ok: %s (%d bytes)", dest, size)
+			return dest, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("libgen download failed")
+	}
+	return "", lastErr
 }

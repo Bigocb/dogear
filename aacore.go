@@ -80,3 +80,63 @@ func (a *apiServer) findOrCreateBook(title, author string) (int64, error) {
 	}
 	return a.store.addBook(&Book{Title: title, Author: author})
 }
+
+// libgenDownloadAndImport tries libgen's own download first (no quota, no key),
+// then falls back to the AA donator key. Files into <Author>/<Title>/.
+func (a *apiServer) libgenDownloadAndImport(ctx context.Context, md5, title, author string) (string, string, error) {
+	stagingDir := os.Getenv("DOGEAR_AA_STAGING")
+	if stagingDir == "" {
+		stagingDir = "/data/staging"
+	}
+	base := title
+	if author != "" {
+		base = author + " - " + title
+	}
+	var staged string
+	var err error
+	if a.libgen != nil {
+		staged, err = a.libgen.Download(ctx, md5, stagingDir, base)
+		if err == nil {
+			return a.finalizeImport(staged, title, author), "libgen", nil
+		}
+		a.libgen.log.Printf("libgen direct failed (%v); falling back to AA key", err)
+	}
+	// fallback: AA keyed fast download
+	dest, aerr := a.aaDownloadAndImport(ctx, md5, title, author)
+	if aerr != nil {
+		if err != nil {
+			return "", "", errString("libgen: " + err.Error() + "; AA: " + aerr.Error())
+		}
+		return "", "", aerr
+	}
+	return dest, "aa", nil
+}
+
+// finalizeImport moves a staged file into the library and extracts a cover.
+func (a *apiServer) finalizeImport(staged, title, author string) string {
+	if author == "" {
+		author = "AA Grabs"
+	}
+	destDir := filepath.Join(a.importer.Library, sanitize(author), sanitize(title))
+	if err := os.MkdirAll(destDir, 0o775); err != nil {
+		return staged
+	}
+	ext := strings.ToLower(filepath.Ext(staged))
+	dest := filepath.Join(destDir, sanitize(title)+ext)
+	if err := os.Rename(staged, dest); err != nil {
+		if err := copyFile(staged, dest); err != nil {
+			return staged
+		}
+		os.Remove(staged)
+	}
+	if ext == ".epub" {
+		if coverData, ctype, cerr := epubCover(dest); cerr == nil && coverData != nil {
+			coverExt := ".jpg"
+			if strings.Contains(ctype, "png") {
+				coverExt = ".png"
+			}
+			_ = os.WriteFile(filepath.Join(destDir, "cover"+coverExt), coverData, 0o644)
+		}
+	}
+	return dest
+}

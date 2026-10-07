@@ -1022,11 +1022,7 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if rel.Source == "libgen" {
-		// search found the md5; AA's keyed API downloads it (no captcha)
-		if a.aa == nil || a.aa.key() == "" {
-			writeErr(w, http.StatusPreconditionFailed, "AA donator key not configured")
-			return
-		}
+		// search found the md5; try libgen's own download, fall back to AA key
 		md5 := strings.ToLower(rel.SourceID)
 		if !md5Re.MatchString(md5) {
 			writeErr(w, http.StatusBadRequest, "invalid libgen md5")
@@ -1034,7 +1030,7 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 		}
 		b, _ := a.store.getBook(id)
 		title, author := b.Title, b.Author
-		dest, err := a.aaDownloadAndImport(r.Context(), md5, title, author)
+		dest, via, err := a.libgenDownloadAndImport(r.Context(), md5, title, author)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
@@ -1047,7 +1043,7 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = a.store.addGrab(id, "libgen:"+md5, "done")
 		b2, _ := a.store.getBook(id)
-		writeJSON(w, http.StatusOK, map[string]any{"book": b2})
+		writeJSON(w, http.StatusOK, map[string]any{"book": b2, "via": via})
 		return
 	} else {
 		if err := a.sm.Grab(r.Context(), &rel); err != nil {
