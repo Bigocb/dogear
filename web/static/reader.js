@@ -123,6 +123,8 @@ async function main() {
   // PDFs (and other fixed-layout books) render as pages: no reflowable text,
   // so typography controls don't apply. Show page-fit controls instead.
   isFixed = !!view.isFixedLayout
+  // the night-theme invert filter in reader.css is for PDF pages only
+  document.documentElement.dataset.layout = isFixed ? 'fixed' : 'reflow'
   if (isFixed) applyPdfZoom()
 
   // ask the service worker to keep this book for offline use
