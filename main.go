@@ -65,6 +65,7 @@ type Book struct {
 	PageCount   *int     `json:"page_count,omitempty"`
 	OwnerID     *int64   `json:"owner_id,omitempty"`
 	Private     bool     `json:"private"`
+	AutoGrab    bool     `json:"auto_grab"`
 }
 
 type Store struct {
@@ -108,7 +109,9 @@ CREATE TABLE IF NOT EXISTS books (
   page_count     INTEGER,
   enriched_at    INTEGER,
   owner_id       INTEGER,
-  private        INTEGER NOT NULL DEFAULT 0
+  private        INTEGER NOT NULL DEFAULT 0,
+  auto_grab      INTEGER NOT NULL DEFAULT 1,
+  autograb_checked_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_books_status ON books(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_books_provider ON books(provider, provider_id) WHERE provider_id IS NOT NULL;
@@ -185,6 +188,8 @@ func (s *Store) migrateMeta() error {
 		{"enriched_at", "INTEGER"},
 		{"owner_id", "INTEGER"},
 		{"private", "INTEGER NOT NULL DEFAULT 0"},
+		{"auto_grab", "INTEGER NOT NULL DEFAULT 1"},
+		{"autograb_checked_at", "INTEGER"},
 	}
 	for _, c := range cols {
 		var n int
@@ -198,7 +203,7 @@ func (s *Store) migrateMeta() error {
 	return nil
 }
 
-const bookColNames = `id,title,author,isbn,provider,provider_id,cover_url,cover_file,status,added_at,updated_at,description,publisher,publish_year,language,series_name,series_position,genres,page_count,owner_id,private`
+const bookColNames = `id,title,author,isbn,provider,provider_id,cover_url,cover_file,status,added_at,updated_at,description,publisher,publish_year,language,series_name,series_position,genres,page_count,owner_id,private,auto_grab`
 const bookCols = bookColNames
 
 // bookColsP returns the column list prefixed (e.g. "b." for JOINs).
@@ -214,12 +219,13 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanBook(sc rowScanner) (Book, error) {
 	var b Book
-	var priv int
+	var priv, auto int
 	err := sc.Scan(&b.ID, &b.Title, &b.Author, &b.ISBN, &b.Provider, &b.ProviderID, &b.CoverURL, &b.CoverFile,
 		&b.Status, &b.AddedAt, &b.UpdatedAt,
 		&b.Description, &b.Publisher, &b.PublishYear, &b.Language, &b.SeriesName, &b.SeriesPos, &b.Genres, &b.PageCount,
-		&b.OwnerID, &priv)
+		&b.OwnerID, &priv, &auto)
 	b.Private = priv != 0
+	b.AutoGrab = auto != 0
 	return b, err
 }
 
@@ -388,6 +394,26 @@ func (s *Store) hasFiles(id int64) bool {
 	var n int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE book_id=?`, id).Scan(&n)
 	return n > 0
+}
+
+// ownerOf returns a book's owner id, or 0 if unowned.
+func (s *Store) ownerOf(id int64) int64 {
+	var o *int64
+	_ = s.db.QueryRow(`SELECT owner_id FROM books WHERE id=?`, id).Scan(&o)
+	if o == nil {
+		return 0
+	}
+	return *o
+}
+
+// setAutoGrab toggles a book's inclusion in the wanted-list watcher.
+func (s *Store) setAutoGrab(bookID int64, on bool) error {
+	v := 0
+	if on {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE books SET auto_grab=?, updated_at=strftime('%s','now') WHERE id=?`, v, bookID)
+	return err
 }
 
 func (s *Store) setProgress(bookID int64, cfi string, percent float64, device string) error {
@@ -881,6 +907,7 @@ type apiServer struct {
 	libgen      *Libgen
 	openlibrary *OpenLibrary
 	importer    *Importer
+	watcher     *WantedWatcher
 }
 
 func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
@@ -1117,6 +1144,81 @@ func (a *apiServer) handleSetPrivate(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := a.store.getBook(id)
 	writeJSON(w, http.StatusOK, b)
+}
+
+// handleSetAutoGrab toggles whether the wanted-list watcher should keep
+// retrying a book. POST /api/books/{id}/auto-grab {auto_grab: bool}
+func (a *apiServer) handleSetAutoGrab(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	user := userFromCtx(r)
+	if user == nil {
+		writeErr(w, http.StatusUnauthorized, "login required")
+		return
+	}
+	var body struct {
+		AutoGrab bool `json:"auto_grab"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	book, err := a.store.getBook(id)
+	if err != nil || book == nil {
+		writeErr(w, http.StatusNotFound, "book not found")
+		return
+	}
+	if book.OwnerID != nil && *book.OwnerID != user.ID && user.Role != "admin" {
+		writeErr(w, http.StatusForbidden, "only the owner can change this")
+		return
+	}
+	if err := a.store.setAutoGrab(id, body.AutoGrab); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b, _ := a.store.getBook(id)
+	writeJSON(w, http.StatusOK, b)
+}
+
+// handleWantedWatchStatus (admin) reports the watcher state and lets an admin
+// run a pass immediately.
+func (a *apiServer) handleWantedWatchStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		go func() { _ = a.watcher.Tick(context.Background()) }()
+		writeJSON(w, http.StatusOK, map[string]any{"started": true})
+		return
+	}
+	type want struct {
+		ID    int64  `json:"id"`
+		Title string `json:"title"`
+		Auto  bool   `json:"auto_grab"`
+	}
+	rows, err := a.store.db.Query(`SELECT id,title,auto_grab FROM books WHERE status='wanted' AND NOT EXISTS (SELECT 1 FROM files f WHERE f.book_id=books.id) ORDER BY added_at`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	var wants []want
+	for rows.Next() {
+		var w want
+		var auto int
+		if err := rows.Scan(&w.ID, &w.Title, &auto); err == nil {
+			w.Auto = auto != 0
+			wants = append(wants, w)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": a.store.config(cfgWantedWatcherOn, "", "true") != "false",
+		"wanted":  wants,
+	})
 }
 
 func (a *apiServer) handleBookStatus(w http.ResponseWriter, r *http.Request) {
@@ -2079,6 +2181,9 @@ func main() {
 	mux.HandleFunc("DELETE /api/books/{id}", api.requireUser(api.handleBook))
 	mux.HandleFunc("DELETE /api/books/{id}/purge", api.requireAdmin(api.handlePurgeBook))
 	mux.HandleFunc("POST /api/books/{id}/private", api.requireUser(api.handleSetPrivate))
+	mux.HandleFunc("POST /api/books/{id}/auto-grab", api.requireUser(api.handleSetAutoGrab))
+	mux.HandleFunc("GET /api/admin/wanted-watch", api.requireAdmin(api.handleWantedWatchStatus))
+	mux.HandleFunc("POST /api/admin/wanted-watch", api.requireAdmin(api.handleWantedWatchStatus))
 	mux.HandleFunc("POST /api/books/{id}/replace", api.requireUser(api.handleReplace))
 	mux.HandleFunc("GET /api/books/{id}/releases", api.requireUser(api.handleBookReleases))
 	mux.HandleFunc("POST /api/books/{id}/status", api.requireUser(api.handleBookStatus))
@@ -2168,6 +2273,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go importer.Run(ctx, 20*time.Second)
+
+	// wanted-list watcher: periodically retry wanted books and auto-grab
+	watcher := NewWantedWatcher(api, log.New(os.Stderr, "dogear/watcher ", log.LstdFlags))
+	api.watcher = watcher
+	go watcher.Run(ctx)
 
 	// AA direct grab (donator key; optional — feature disabled when unset)
 	importerAPI := api

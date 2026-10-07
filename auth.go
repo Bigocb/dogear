@@ -635,8 +635,14 @@ func (s *Store) shelfAdd(userID, bookID int64, status string) error {
 	if status == "" {
 		status = "imported"
 	}
+	// Follow the authoritative status being written, so a wanted row becomes
+	// imported once a grab lands -- but never DOWNGRADE a book the reader has
+	// progressed: reading/read wins over an incoming wanted/grabbed/imported.
 	_, err := s.db.Exec(`INSERT INTO user_books(user_id, book_id, status, hidden, added_at) VALUES(?,?,?,0,strftime('%s','now'))
-		ON CONFLICT(user_id, book_id) DO UPDATE SET hidden=0, status=CASE WHEN user_books.status='imported' AND excluded.status!='imported' THEN excluded.status ELSE user_books.status END`,
+		ON CONFLICT(user_id, book_id) DO UPDATE SET hidden=0, status=CASE
+			WHEN user_books.status IN ('reading','read') AND excluded.status IN ('wanted','grabbed','imported')
+			  THEN user_books.status
+			ELSE excluded.status END`,
 		userID, bookID, status)
 	return err
 }

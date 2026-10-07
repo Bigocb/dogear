@@ -374,15 +374,18 @@ function renderBookSheet() {
     }
     case 'imported':
       actions.append(btn('Start reading', 'primary block', () => openReader(b)),
-        pair(btn('Mark finished', '', () => setStatus(b, 'read')), enrichBtn));
+        pair(btn('Mark finished', '', () => setStatus(b, 'read')), btn('Choose a different file', '', () => openPicker(b))),
+        enrichBtn);
       break;
     case 'reading':
       actions.append(btn('Continue reading', 'primary block', () => openReader(b)),
-        pair(btn('Mark finished', '', () => setStatus(b, 'read')), enrichBtn));
+        pair(btn('Mark finished', '', () => setStatus(b, 'read')), btn('Choose a different file', '', () => openPicker(b))),
+        enrichBtn);
       break;
     case 'read':
       actions.append(btn('Read again', 'primary block', () => openReader(b)),
-        pair(btn('Mark unread', '', () => setStatus(b, 'imported')), enrichBtn));
+        pair(btn('Mark unread', '', () => setStatus(b, 'imported')), btn('Choose a different file', '', () => openPicker(b))),
+        enrichBtn);
       break;
     default:
       actions.append(enrichBtn);
@@ -406,6 +409,26 @@ function renderBookSheet() {
       toast(err.message, 'error');
     }
   };
+
+  // auto-download toggle (only meaningful for books not yet downloaded)
+  if (b.status === 'wanted' || b.status === 'grabbed') {
+    const autoRow = document.createElement('label');
+    autoRow.className = 'priv-toggle';
+    autoRow.innerHTML = `
+      <input type="checkbox" id="auto-check" ${b.auto_grab ? 'checked' : ''}>
+      <span>Auto-download when a copy appears</span>`;
+    $('.bk-remove', body).appendChild(autoRow);
+    $('#auto-check', autoRow).onchange = async (e) => {
+      try {
+        await api(`/books/${b.id}/auto-grab`, { method: 'POST', body: JSON.stringify({ auto_grab: e.target.checked }) });
+        b.auto_grab = e.target.checked;
+        toast(e.target.checked ? 'Will auto-download when available' : 'Auto-download off');
+      } catch (err) {
+        e.target.checked = !e.target.checked;
+        toast(err.message, 'error');
+      }
+    };
+  }
 
   if (b.status !== 'library') {
     const rm = btn('Remove from my shelf', 'danger', null);

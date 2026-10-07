@@ -231,6 +231,45 @@ if (me && me.role === 'admin') {
   loadUsers().catch(e => toast(e.message, 'error'));
   loadSettings().catch(e => toast(e.message, 'error'));
   loadStatus().catch(e => toast(e.message, 'error'));
+  loadWantedWatch().catch(() => {});
+}
+
+// ---- wanted-list watcher ----
+
+async function loadWantedWatch() {
+  let d;
+  try { d = await api('/admin/wanted-watch'); } catch (e) { return; }
+  const el = $('#wanted-watch');
+  const wants = d.wanted || [];
+  if (!wants.length) {
+    el.innerHTML = '<div class="hint">Nothing on the wanted list right now.</div>';
+    return;
+  }
+  el.innerHTML = wants.map(w => `
+    <div class="admin-row">
+      <div class="grow">${escapeHtml(w.title)}</div>
+      <span class="val ${w.auto_grab ? 'status-ok' : ''}">${w.auto_grab ? 'Auto' : 'Off'}</span>
+    </div>`).join('');
+}
+
+const runWatch = $('#btn-run-watch');
+if (runWatch) {
+  runWatch.onclick = async () => {
+    runWatch.disabled = true;
+    const orig = runWatch.textContent;
+    runWatch.textContent = 'Checking…';
+    $('#watch-result').textContent = 'Searching for wanted books now…';
+    try {
+      await api('/admin/wanted-watch', { method: 'POST', body: JSON.stringify({}) });
+      $('#watch-result').textContent = 'Started. Results will appear as books download.';
+      setTimeout(loadWantedWatch, 3000);
+    } catch (e) {
+      $('#watch-result').textContent = '✕ ' + e.message;
+    } finally {
+      runWatch.disabled = false;
+      runWatch.textContent = orig;
+    }
+  };
 }
 
 // ---- metadata enrichment batch ----
