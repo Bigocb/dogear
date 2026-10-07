@@ -65,13 +65,16 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 /* ---------- listen (TTS) ---------- */
 #tts-bar {
   position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--safe-b) + 88px);
+  /* sit just above the bottom bar while it shows, near the bottom edge when it hides;
+     --bb-h is the bottom bar's real height, measured in reader.js */
+  bottom: calc(var(--bb-h, 140px) + 12px);
+  transition: bottom .22s ease;
   display: flex; align-items: center; gap: 4px;
   padding: 6px 8px; border-radius: 999px;
   background: color-mix(in srgb, var(--card) 96%, transparent);
   border: 1px solid var(--rule);
   box-shadow: 0 8px 28px rgba(0,0,0,.35);
-  z-index: 6;
+  z-index: 11; /* above the bars, so they can never cover it */
 }
 .tts-btn { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: var(--fg); }
 .tts-btn:active { background: var(--raised); }
@@ -79,6 +82,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .tts-btn svg { width: 22px; height: 22px; }
 .tts-rate { min-width: 46px; height: 42px; padding: 0 10px; border-radius: 999px; color: var(--fg); font-size: .82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .tts-rate:active { background: var(--raised); }
+#reader-root:not(.chrome) #tts-bar { bottom: calc(var(--safe-b) + 16px); }
 #tts-bar .icon-play { display: none; }
 #tts-bar.paused .icon-pause { display: none; }
 #tts-bar.paused .icon-play { display: block; }

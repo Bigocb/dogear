@@ -227,6 +227,10 @@ function toast(msg) {
 }
 
 // ---- chrome (top/bottom bars) ----
+// publish the bottom bar's height so floating controls (read aloud) can sit above it
+new ResizeObserver(([e]) => {
+  document.documentElement.style.setProperty('--bb-h', `${Math.round(e.target.getBoundingClientRect().height)}px`)
+}).observe($('#reader-bottombar'))
 function setChrome(on) { $('#reader-root').classList.toggle('chrome', on) }
 const chromeOn = () => $('#reader-root').classList.contains('chrome')
 
