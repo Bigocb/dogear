@@ -1679,7 +1679,7 @@ func (a *apiServer) handleContent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rows, err := a.store.db.Query(`SELECT path FROM files WHERE book_id=? ORDER BY id LIMIT 1`, id)
+	rows, err := a.store.db.Query(`SELECT path FROM files WHERE book_id=? ORDER BY id DESC LIMIT 1`, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2079,6 +2079,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/books/{id}", api.requireUser(api.handleBook))
 	mux.HandleFunc("DELETE /api/books/{id}/purge", api.requireAdmin(api.handlePurgeBook))
 	mux.HandleFunc("POST /api/books/{id}/private", api.requireUser(api.handleSetPrivate))
+	mux.HandleFunc("POST /api/books/{id}/replace", api.requireUser(api.handleReplace))
 	mux.HandleFunc("GET /api/books/{id}/releases", api.requireUser(api.handleBookReleases))
 	mux.HandleFunc("POST /api/books/{id}/status", api.requireUser(api.handleBookStatus))
 	mux.HandleFunc("POST /api/books/{id}/grab", api.requireUser(api.handleGrab))

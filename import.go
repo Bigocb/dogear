@@ -248,19 +248,31 @@ func (im *Importer) matchBook(c candidate) *Book {
 func (im *Importer) storeRecord(book *Book, path, format string, size int64, coverPath string) (int64, error) {
 	now := time.Now().Unix()
 	var id int64
-	err := im.store.db.QueryRow(`SELECT id FROM books WHERE lower(title)=lower(?) AND lower(coalesce(author,''))=lower(?)`,
-		book.Title, book.Author).Scan(&id)
-	if err != nil {
-		res, err := im.store.db.Exec(`INSERT INTO books(title,author,isbn,status,cover_file,added_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
-			book.Title, book.Author, book.ISBN, "imported", nonEmpty(coverPath), now, now)
-		if err != nil {
-			return 0, err
-		}
-		id, _ = res.LastInsertId()
-	} else {
-		if _, err := im.store.db.Exec(`UPDATE books SET status='imported', cover_file=coalesce(nullif(?,''), cover_file), updated_at=? WHERE id=?`,
+	// If the caller knows the book (a grab targeting an existing wanted entry),
+	// attach the file to THAT book. Never create a duplicate from a title
+	// mismatch -- that orphaned the file from its shelf entry.
+	if book.ID != 0 {
+		id = book.ID
+		if _, err := im.store.db.Exec(`UPDATE books SET status='imported',
+			cover_file=coalesce(nullif(?,''), cover_file), updated_at=? WHERE id=?`,
 			coverPath, now, id); err != nil {
 			return 0, err
+		}
+	} else {
+		err := im.store.db.QueryRow(`SELECT id FROM books WHERE lower(title)=lower(?) AND lower(coalesce(author,''))=lower(?)`,
+			book.Title, book.Author).Scan(&id)
+		if err != nil {
+			res, err := im.store.db.Exec(`INSERT INTO books(title,author,isbn,status,cover_file,added_at,updated_at,owner_id) VALUES(?,?,?,?,?,?,?,?)`,
+				book.Title, book.Author, book.ISBN, "imported", nonEmpty(coverPath), now, now, book.OwnerID)
+			if err != nil {
+				return 0, err
+			}
+			id, _ = res.LastInsertId()
+		} else {
+			if _, err := im.store.db.Exec(`UPDATE books SET status='imported', cover_file=coalesce(nullif(?,''), cover_file), updated_at=? WHERE id=?`,
+				coverPath, now, id); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if _, err := im.store.db.Exec(`INSERT INTO files(book_id,path,format,size,imported_at) VALUES(?,?,?,?,?)

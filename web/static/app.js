@@ -505,12 +505,19 @@ async function openPicker(b) {
   $('#picker-count').textContent = '';
   $('#picker-list').innerHTML = '<div class="loading-line">Searching for downloads…</div>';
   openSheet('#picker-scrim');
+  // a book with a file already (imported/reading/read) means this is a replace
+  $('#picker-title').textContent = hasFile(b) ? 'Replace this book' : 'Choose a download';
   try {
     const { releases } = await api(`/books/${b.id}/releases`);
     renderReleases(releases || []);
   } catch (e) {
     $('#picker-list').innerHTML = `<div class="empty-state"><h3>Search didn't work</h3><p>${escapeHtml(shelfmarkMessage(e))}</p></div>`;
   }
+}
+
+// hasFile: a book that's been imported (or read) has a file on disk.
+function hasFile(b) {
+  return b && ['imported', 'reading', 'read'].includes(b.status);
 }
 
 function formatRank(f) {
@@ -542,15 +549,29 @@ function renderReleases(releases) {
         <div class="rel-sub">${escapeHtml([badge, r.size, r.seeders != null ? `${r.seeders} seeders` : '', r.extra && r.extra.author, r.language].filter(Boolean).join(' · '))}</div>
       </div>`;
     row.onclick = () => run(row, async () => {
+      const replacing = hasFile(pickerBook);
       if (isLibgen) {
-        await api(`/books/${pickerBook.id}/grab-libgen`, { method: 'POST', body: JSON.stringify({
-          md5: r.source_id, title: r.title, author: r.extra && r.extra.author,
-        })});
-        toast(`Downloaded “${r.title}”.`);
+        if (replacing) {
+          await api(`/books/${pickerBook.id}/replace`, { method: 'POST', body: JSON.stringify({
+            md5: r.source_id, title: r.title, author: r.extra && r.extra.author,
+          })});
+          toast(`Replaced with “${r.title}”.`);
+        } else {
+          await api(`/books/${pickerBook.id}/grab-libgen`, { method: 'POST', body: JSON.stringify({
+            md5: r.source_id, title: r.title, author: r.extra && r.extra.author,
+          })});
+          toast(`Downloaded “${r.title}”.`);
+        }
         closeSheet('#picker-scrim'); pickerBook = null; refreshCurrent();
       } else {
-        await api(`/books/${pickerBook.id}/grab-release`, { method: 'POST', body: JSON.stringify(r) });
-        afterGrab();
+        if (replacing) {
+          const res = await api(`/books/${pickerBook.id}/replace`, { method: 'POST', body: JSON.stringify({ release: r }) });
+          toast(res.note || `Replacement queued.`);
+        } else {
+          await api(`/books/${pickerBook.id}/grab-release`, { method: 'POST', body: JSON.stringify(r) });
+          toast(`Downloading “${r.title}”.`);
+        }
+        closeSheet('#picker-scrim'); pickerBook = null; refreshCurrent();
       }
     });
     list.appendChild(row);
