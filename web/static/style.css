@@ -402,3 +402,11 @@ main {
 .test-out { display: inline-block; margin-top: 2px; }
 .test-out.status-ok { color: var(--sage); }
 .test-out.status-bad { color: var(--oxblood); }
+
+/* private toggle on the book sheet */
+.priv-toggle {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 0; font-size: .88rem; color: var(--paper-dim); cursor: pointer;
+  border-top: 1px solid var(--rule); margin-top: 6px;
+}
+.priv-toggle input { width: 18px; height: 18px; accent-color: var(--gilt); }

@@ -662,10 +662,13 @@ func (s *Store) shelfSetStatus(userID, bookID int64, status string) error {
 
 // unshelvedBooks lists library books NOT on a user's shelf (the "add to my shelf" browse).
 func (s *Store) unshelvedBooks(userID int64, query string) ([]Book, error) {
+	// Household browse: shared books plus the user's OWN private books, but
+	// never anyone else's private books.
 	sqlQ := `SELECT ` + bookColsP("b.") + `
 		FROM books b
-		WHERE b.id NOT IN (SELECT book_id FROM user_books WHERE user_id=?)`
-	args := []any{userID}
+		WHERE b.id NOT IN (SELECT book_id FROM user_books WHERE user_id=?)
+		  AND (b.private = 0 OR b.owner_id = ?)`
+	args := []any{userID, userID}
 	if query != "" {
 		sqlQ += ` AND (lower(b.title) LIKE ? OR lower(coalesce(b.author,'')) LIKE ?)`
 		q := "%" + strings.ToLower(query) + "%"
@@ -687,6 +690,35 @@ func (s *Store) unshelvedBooks(userID int64, query string) ([]Book, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// canAccessBook reports whether userID may see/open a book: it's on their
+// shelf, or it's shared (not private), or they own it.
+func (s *Store) canAccessBook(userID, bookID int64) bool {
+	if _, _, ok := s.shelfStatus(userID, bookID); ok {
+		return true
+	}
+	var priv int
+	var owner *int64
+	err := s.db.QueryRow(`SELECT private, owner_id FROM books WHERE id=?`, bookID).Scan(&priv, &owner)
+	if err != nil {
+		return false
+	}
+	if priv == 0 {
+		return true
+	}
+	return owner != nil && *owner == userID
+}
+
+// setPrivate toggles a book's private flag. Only the owner (or an admin) may
+// change it.
+func (s *Store) setPrivate(bookID int64, private bool) error {
+	priv := 0
+	if private {
+		priv = 1
+	}
+	_, err := s.db.Exec(`UPDATE books SET private=?, updated_at=strftime('%s','now') WHERE id=?`, priv, bookID)
+	return err
 }
 
 // ---- per-user progress / highlights / bookmarks ----

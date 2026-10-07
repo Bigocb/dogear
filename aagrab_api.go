@@ -42,7 +42,7 @@ func (a *apiServer) handleAAGrab(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "AA " + md5[:8]
 	}
-	bookID, err := a.findOrCreateBook(title, body.Author)
+	bookID, err := a.findOrCreateBook(title, body.Author, userIDFromCtx(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

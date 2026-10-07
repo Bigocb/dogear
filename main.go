@@ -63,6 +63,8 @@ type Book struct {
 	SeriesPos   *float64 `json:"series_position,omitempty"`
 	Genres      *string  `json:"genres,omitempty"`
 	PageCount   *int     `json:"page_count,omitempty"`
+	OwnerID     *int64   `json:"owner_id,omitempty"`
+	Private     bool     `json:"private"`
 }
 
 type Store struct {
@@ -104,7 +106,9 @@ CREATE TABLE IF NOT EXISTS books (
   series_position REAL,
   genres         TEXT,
   page_count     INTEGER,
-  enriched_at    INTEGER
+  enriched_at    INTEGER,
+  owner_id       INTEGER,
+  private        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_books_status ON books(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_books_provider ON books(provider, provider_id) WHERE provider_id IS NOT NULL;
@@ -179,6 +183,8 @@ func (s *Store) migrateMeta() error {
 		{"genres", "TEXT"},
 		{"page_count", "INTEGER"},
 		{"enriched_at", "INTEGER"},
+		{"owner_id", "INTEGER"},
+		{"private", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, c := range cols {
 		var n int
@@ -192,7 +198,7 @@ func (s *Store) migrateMeta() error {
 	return nil
 }
 
-const bookColNames = `id,title,author,isbn,provider,provider_id,cover_url,cover_file,status,added_at,updated_at,description,publisher,publish_year,language,series_name,series_position,genres,page_count`
+const bookColNames = `id,title,author,isbn,provider,provider_id,cover_url,cover_file,status,added_at,updated_at,description,publisher,publish_year,language,series_name,series_position,genres,page_count,owner_id,private`
 const bookCols = bookColNames
 
 // bookColsP returns the column list prefixed (e.g. "b." for JOINs).
@@ -208,9 +214,12 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanBook(sc rowScanner) (Book, error) {
 	var b Book
+	var priv int
 	err := sc.Scan(&b.ID, &b.Title, &b.Author, &b.ISBN, &b.Provider, &b.ProviderID, &b.CoverURL, &b.CoverFile,
 		&b.Status, &b.AddedAt, &b.UpdatedAt,
-		&b.Description, &b.Publisher, &b.PublishYear, &b.Language, &b.SeriesName, &b.SeriesPos, &b.Genres, &b.PageCount)
+		&b.Description, &b.Publisher, &b.PublishYear, &b.Language, &b.SeriesName, &b.SeriesPos, &b.Genres, &b.PageCount,
+		&b.OwnerID, &priv)
+	b.Private = priv != 0
 	return b, err
 }
 
@@ -300,8 +309,12 @@ func (s *Store) findBookByProvider(provider, providerID string) (*Book, error) {
 
 func (s *Store) addBook(b *Book) (int64, error) {
 	now := time.Now().Unix()
-	res, err := s.db.Exec(`INSERT INTO books(title,author,isbn,provider,provider_id,cover_url,status,added_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		b.Title, b.Author, b.ISBN, b.Provider, b.ProviderID, b.CoverURL, "wanted", now, now)
+	priv := 0
+	if b.Private {
+		priv = 1
+	}
+	res, err := s.db.Exec(`INSERT INTO books(title,author,isbn,provider,provider_id,cover_url,status,added_at,updated_at,owner_id,private) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		b.Title, b.Author, b.ISBN, b.Provider, b.ProviderID, b.CoverURL, "wanted", now, now, b.OwnerID, priv)
 	if err != nil {
 		return 0, err
 	}
@@ -327,6 +340,54 @@ func (s *Store) deleteBook(id int64) error {
 		}
 	}
 	return nil
+}
+
+// purgeBook removes a book and every trace of it, for ALL users: shelves,
+// reading progress, highlights, bookmarks, grabs, files, the book row.
+func (s *Store) purgeBook(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM progress WHERE book_id=?`,
+		`DELETE FROM highlights WHERE book_id=?`,
+		`DELETE FROM bookmarks WHERE book_id=?`,
+		`DELETE FROM grabs WHERE book_id=?`,
+		`DELETE FROM files WHERE book_id=?`,
+		`DELETE FROM user_books WHERE book_id=?`,
+		`DELETE FROM books WHERE id=?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// bookFilePaths returns the on-disk paths recorded for a book's files.
+func (s *Store) bookFilePaths(id int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT path FROM files WHERE book_id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
+// hasFiles reports whether a book has any imported file.
+func (s *Store) hasFiles(id int64) bool {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM files WHERE book_id=?`, id).Scan(&n)
+	return n > 0
 }
 
 func (s *Store) setProgress(bookID int64, cfi string, percent float64, device string) error {
@@ -883,6 +944,7 @@ func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusUnauthorized, "login required")
 			return
 		}
+		b.OwnerID = &user.ID // whoever adds it owns it
 		// dedupe by provider id when present
 		if b.Provider != nil && b.ProviderID != nil && *b.ProviderID != "" {
 			existing, err := a.store.findBookByProvider(*b.Provider, *b.ProviderID)
@@ -895,7 +957,7 @@ func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		id, err := a.store.addBook(&b)
+		id, err := a.store.addBook(&b) // b.OwnerID already set by the caller
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -920,13 +982,11 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		// visibility: if the book is not on this user's shelf, treat as not found
+		// visibility: shelf, shared book, or your own private book
 		user := userFromCtx(r)
-		if user != nil {
-			if _, hidden, ok := a.store.shelfStatus(user.ID, id); !ok || hidden {
-				writeErr(w, http.StatusNotFound, "book not on your shelf")
-				return
-			}
+		if user != nil && !a.store.canAccessBook(user.ID, id) {
+			writeErr(w, http.StatusNotFound, "book not available")
+			return
 		}
 		b, err := a.store.getBook(id)
 		if err != nil {
@@ -944,12 +1004,23 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, b)
 	case http.MethodDelete:
-		// Netflix model: DELETE removes from YOUR shelf, not the shared library.
 		user := userFromCtx(r)
 		if user == nil {
 			writeErr(w, http.StatusUnauthorized, "login required")
 			return
 		}
+		// If the book was never downloaded (no files), it's just a wanted-list
+		// entry -- remove it from the whole system so no phantom lingers.
+		if !a.store.hasFiles(id) {
+			if err := a.store.purgeBook(id); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// Otherwise it's a real file shared in the library: removing only takes
+		// it off YOUR shelf, leaving it for others.
 		if err := a.store.shelfRemove(user.ID, id); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -958,6 +1029,91 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// handlePurgeBook deletes a book from the whole system: every user's shelf,
+// all reading data, and the file(s) on disk. Admin only.
+// DELETE /api/books/{id}/purge
+func (a *apiServer) handlePurgeBook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	paths, _ := a.store.bookFilePaths(id)
+	if err := a.store.purgeBook(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// remove the book's directory (covers included) then the DB rows are gone
+	removed := 0
+	dirs := map[string]bool{}
+	for _, p := range paths {
+		if os.Remove(p) == nil {
+			removed++
+		}
+		dirs[filepath.Dir(p)] = true
+	}
+	for d := range dirs {
+		// only remove the empty leaf dir (never the library root)
+		if a.importer != nil && d != a.importer.Library {
+			_ = os.Remove(d)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "files_removed": removed})
+}
+
+// handleSetPrivate toggles a book's visibility (private = only the owner).
+// POST /api/books/{id}/private  {private: bool}
+func (a *apiServer) handleSetPrivate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	user := userFromCtx(r)
+	if user == nil {
+		writeErr(w, http.StatusUnauthorized, "login required")
+		return
+	}
+	var body struct {
+		Private bool `json:"private"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	book, err := a.store.getBook(id)
+	if err != nil || book == nil {
+		writeErr(w, http.StatusNotFound, "book not found")
+		return
+	}
+	// only the owner or an admin may change visibility
+	if book.OwnerID != nil && *book.OwnerID != user.ID && user.Role != "admin" {
+		writeErr(w, http.StatusForbidden, "only the owner can change this")
+		return
+	}
+	if book.OwnerID == nil {
+		// first time it's being marked private: claim ownership for the caller
+		if _, err := a.store.db.Exec(`UPDATE books SET owner_id=? WHERE id=? AND owner_id IS NULL`, user.ID, id); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := a.store.setPrivate(id, body.Private); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b, _ := a.store.getBook(id)
+	writeJSON(w, http.StatusOK, b)
 }
 
 func (a *apiServer) handleBookStatus(w http.ResponseWriter, r *http.Request) {
@@ -1458,6 +1614,9 @@ func (a *apiServer) handleCover(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Covers are stable per book: let the browser cache them aggressively so
+	// switching tabs doesn't re-fetch every image.
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	// 1. local cover file (imported books)
 	if b.CoverFile != nil && *b.CoverFile != "" {
 		http.ServeFile(w, r, *b.CoverFile)
@@ -1493,6 +1652,7 @@ func (a *apiServer) handleShelfmarkCover(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	resp, err := http.Get(a.sm.base + path)
 	if err != nil {
 		http.Error(w, "cover fetch failed", http.StatusBadGateway)
@@ -1511,7 +1671,7 @@ func (a *apiServer) handleContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user := userFromCtx(r); user != nil {
-		if _, hidden, ok := a.store.shelfStatus(user.ID, id); !ok || hidden {
+		if !a.store.canAccessBook(user.ID, id) {
 			http.NotFound(w, r)
 			return
 		}
@@ -1914,6 +2074,8 @@ func main() {
 	mux.HandleFunc("POST /api/books", api.requireUser(api.handleBooks))
 	mux.HandleFunc("GET /api/books/{id}", api.requireUser(api.handleBook))
 	mux.HandleFunc("DELETE /api/books/{id}", api.requireUser(api.handleBook))
+	mux.HandleFunc("DELETE /api/books/{id}/purge", api.requireAdmin(api.handlePurgeBook))
+	mux.HandleFunc("POST /api/books/{id}/private", api.requireUser(api.handleSetPrivate))
 	mux.HandleFunc("GET /api/books/{id}/releases", api.requireUser(api.handleBookReleases))
 	mux.HandleFunc("POST /api/books/{id}/status", api.requireUser(api.handleBookStatus))
 	mux.HandleFunc("POST /api/books/{id}/grab", api.requireUser(api.handleGrab))

@@ -87,7 +87,9 @@ function coverEl(b, { remote = false } = {}) {
       <div class="rule"></div>
       <div class="a">${escapeHtml(b.author || '')}</div>
     </div>`;
-  const src = remote ? b.cover_url : (b.id ? `/api/covers/${b.id}` : null);
+  // version the cover URL by updated_at so it can be cached hard but still
+  // refresh when the cover changes (e.g. after enrichment)
+  const src = remote ? b.cover_url : (b.id ? `/api/covers/${b.id}?v=${b.updated_at || 0}` : null);
   if (src) {
     const img = new Image();
     img.alt = '';
@@ -386,6 +388,24 @@ function renderBookSheet() {
       actions.append(enrichBtn);
   }
 
+  // privacy toggle (for books that exist in the library)
+  const privRow = document.createElement('label');
+  privRow.className = 'priv-toggle';
+  privRow.innerHTML = `
+    <input type="checkbox" id="priv-check" ${b.private ? 'checked' : ''}>
+    <span>Private — only I can see this</span>`;
+  $('.bk-remove', body).appendChild(privRow);
+  $('#priv-check', privRow).onchange = async (e) => {
+    try {
+      await api(`/books/${b.id}/private`, { method: 'POST', body: JSON.stringify({ private: e.target.checked }) });
+      b.private = e.target.checked;
+      toast(e.target.checked ? 'Marked private' : 'Now shared with the household');
+    } catch (err) {
+      e.target.checked = !e.target.checked;
+      toast(err.message, 'error');
+    }
+  };
+
   if (b.status !== 'library') {
     const rm = btn('Remove from my shelf', 'danger', null);
     rm.onclick = () => {
@@ -399,11 +419,34 @@ function renderBookSheet() {
       clearTimeout(rm._disarm);
       run(rm, async () => {
         await api(`/books/${b.id}`, { method: 'DELETE' });
-        toast(`Removed “${b.title}”. It's still in the household library.`);
+        toast((b.status === 'wanted' || b.status === 'grabbed')
+          ? `Removed “${b.title}” from your wanted list.`
+          : `Removed “${b.title}”. It's still in the household library.`);
         closeSheet('#book-scrim'); refreshCurrent();
       });
     };
     $('.bk-remove', body).appendChild(rm);
+  }
+
+  // admins get a delete-everywhere action
+  if (me && me.role === 'admin') {
+    const del = btn('Delete everywhere', 'danger', null);
+    del.onclick = () => {
+      if (!del.classList.contains('armed')) {
+        del.classList.add('armed');
+        del.textContent = 'Tap again — deletes the file for everyone';
+        clearTimeout(del._disarm);
+        del._disarm = setTimeout(() => { del.classList.remove('armed'); del.textContent = 'Delete everywhere'; }, 6000);
+        return;
+      }
+      clearTimeout(del._disarm);
+      run(del, async () => {
+        await api(`/books/${b.id}/purge`, { method: 'DELETE' });
+        toast(`Deleted “${b.title}” everywhere.`);
+        closeSheet('#book-scrim'); refreshCurrent();
+      });
+    };
+    $('.bk-remove', body).appendChild(del);
   }
 }
 

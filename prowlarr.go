@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -116,8 +117,19 @@ func (p *Prowlarr) Grab(ctx context.Context, r ProwlarrResult) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("prowlarr grab %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		msg := string(body)
+		// Prowlarr 500s when the torrent is already in the download client.
+		// That's not a failure for us -- the download is (still) queued.
+		if strings.Contains(msg, "already in session") || strings.Contains(msg, "already exists") {
+			p.log.Printf("prowlarr grab: already queued: %s", r.Title)
+			return nil
+		}
+		// Surface a concise reason instead of a raw JSON dump.
+		if m := regexp.MustCompile(`"message"\s*:\s*"([^"]+)"`).FindStringSubmatch(msg); m != nil {
+			return fmt.Errorf("Prowlarr: %s", strings.ReplaceAll(m[1], `\n`, " "))
+		}
+		return fmt.Errorf("prowlarr grab %d: %s", resp.StatusCode, msg[:min(200, len(msg))])
 	}
 	p.log.Printf("prowlarr grab queued: %s (%s)", r.Title, r.Indexer)
 	return nil

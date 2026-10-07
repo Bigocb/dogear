@@ -70,15 +70,19 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 // findOrCreateBook dedupes on (title, author) so repeat grabs of the same book
-// don't create duplicates.
-func (a *apiServer) findOrCreateBook(title, author string) (int64, error) {
+// don't create duplicates. New books are owned by ownerID (0 = unknown).
+func (a *apiServer) findOrCreateBook(title, author string, ownerID int64) (int64, error) {
 	existing, _ := a.store.listBooks("", "")
 	for _, b := range existing {
 		if strings.EqualFold(b.Title, title) && strings.EqualFold(b.Author, author) {
 			return b.ID, nil
 		}
 	}
-	return a.store.addBook(&Book{Title: title, Author: author})
+	nb := &Book{Title: title, Author: author}
+	if ownerID != 0 {
+		nb.OwnerID = &ownerID
+	}
+	return a.store.addBook(nb)
 }
 
 // libgenDownloadAndImport tries libgen's own download first (no quota, no key),
