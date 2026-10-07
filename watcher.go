@@ -51,7 +51,7 @@ func (w *WantedWatcher) Run(ctx context.Context) {
 func (w *WantedWatcher) Tick(ctx context.Context) error {
 	// wanted books that have no file yet, auto-grab on
 	rows, err := w.api.store.db.Query(`
-		SELECT ` + bookCols + ` FROM books b
+		SELECT ` + bookColsP("b.") + ` FROM books b
 		WHERE b.status IN ('wanted') AND b.auto_grab != 0
 		  AND NOT EXISTS (SELECT 1 FROM files f WHERE f.book_id = b.id)
 		ORDER BY b.added_at ASC LIMIT 25`)

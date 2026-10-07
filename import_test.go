@@ -211,6 +211,37 @@ func TestReconcileFilesRestoresWantedBug(t *testing.T) {
 	}
 }
 
+func TestHasFileFlag(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	id, err := s.addBook(&Book{Title: "No Copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.getBook(id)
+	if b.HasFile {
+		t.Fatal("book without a file should report has_file=false")
+	}
+	if _, err := s.db.Exec(`INSERT INTO files(book_id,path,format,size,imported_at) VALUES(?,?,?,?,1)`,
+		id, "/library/x.epub", "epub", 5); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = s.getBook(id)
+	if !b.HasFile {
+		t.Fatal("book with a file should report has_file=true")
+	}
+	books, err := s.listBooks("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || !books[0].HasFile {
+		t.Fatalf("listBooks has_file = %+v", books)
+	}
+}
+
 func TestLooksLikePersonName(t *testing.T) {
 	yes := []string{"Logan Jacobs", "Andy Weir", "Frank Herbert", "J. R. R. Tolkien"}
 	no := []string{"Dinosaur World 2", "The Divine Comedy", "Book 3", "Cultivation: Battle Mage Farmer"}

@@ -120,6 +120,8 @@ function bookTile(b, { onClick } = {}) {
   el.insertAdjacentHTML('beforeend', `<div class="bt">${escapeHtml(b.title || 'Untitled')}</div><div class="ba">${escapeHtml(b.author || '')}</div>`);
   if (b.status === 'wanted' || b.status === 'grabbed') {
     el.insertAdjacentHTML('beforeend', `<div class="bs">${b.status === 'grabbed' ? 'Downloading' : 'Wanted'}</div>`);
+  } else if (!b.has_file && (b.status === 'reading' || b.status === 'imported' || b.status === 'read')) {
+    el.insertAdjacentHTML('beforeend', `<div class="bs">No copy yet</div>`);
   }
   el.onclick = onClick || (() => openBook(b));
   return el;
@@ -152,13 +154,22 @@ async function loadHome() {
   $('#home-view .page-title').textContent = hour < 5 ? 'Late reading' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
   const reading = home?.continue || [];
-  const unread = shelf.filter(b => b.status === 'imported');
+  const unread = shelf.filter(b => hasFile(b) && b.status === 'imported');
   const hero = $('#home-hero');
   hero.innerHTML = '';
-  const lead = reading[0] || unread[0];
+  // lead: prefer a readable book to continue/start; fall back to a book that
+  // still needs a download (e.g. a Hardcover "currently reading" with no file).
+  const lead = reading.find(hasFile) || unread[0] || reading[0]
+    || shelf.find(b => !hasFile(b) && (b.status === 'wanted' || b.status === 'grabbed'));
   if (lead) {
+    const readable = hasFile(lead);
     const isReading = lead.status === 'reading';
+    const mode = !readable ? 'download' : (isReading ? 'continue' : 'start');
     const pct = Math.round(lead.percent || percents.get(lead.id) || 0);
+    const eyebrow = mode === 'download' ? 'Currently reading · no copy yet'
+      : mode === 'continue' ? 'Continue reading' : 'Up next';
+    const cta = mode === 'download' ? 'Find a download'
+      : mode === 'continue' ? 'Continue' : 'Start reading';
     const card = document.createElement('div');
     card.className = 'hero';
     const coverWrap = document.createElement('div');
@@ -168,13 +179,13 @@ async function loadHome() {
     card.appendChild(coverWrap);
     card.insertAdjacentHTML('beforeend', `
       <div>
-        <div class="eyebrow">${isReading ? 'Continue reading' : 'Up next'}</div>
+        <div class="eyebrow">${eyebrow}</div>
         <h2>${escapeHtml(lead.title)}</h2>
         <div class="by">${escapeHtml(lead.author || '')}</div>
-        ${isReading ? `<div class="progress-line"><div class="meter"><i style="width:${pct}%"></i></div><span>${pct}%</span></div>` : '<div style="height:16px"></div>'}
-        <button class="btn primary block">${isReading ? 'Continue' : 'Start reading'}</button>
+        ${mode === 'continue' && pct ? `<div class="progress-line"><div class="meter"><i style="width:${pct}%"></i></div><span>${pct}%</span></div>` : '<div style="height:16px"></div>'}
+        <button class="btn primary block">${cta}</button>
       </div>`);
-    $('.btn', card).onclick = () => openReader(lead);
+    $('.btn', card).onclick = () => mode === 'download' ? openPicker(lead) : openReader(lead);
     hero.appendChild(card);
   } else {
     hero.innerHTML = `
@@ -200,7 +211,7 @@ async function loadHome() {
     shelves.appendChild(sec);
   };
   addShelf('Also reading', reading.slice(lead && lead.status === 'reading' ? 1 : 0), 'reading');
-  addShelf('Recently added', (home?.recent || []).filter(b => b.id !== lead?.id), 'imported');
+  addShelf('Recently added', (home?.recent || []).filter(b => hasFile(b) && b.id !== lead?.id), 'imported');
   addShelf('On the way', shelf.filter(b => b.status === 'wanted' || b.status === 'grabbed'), 'wanted');
   addShelf('Finished', shelf.filter(b => b.status === 'read'), 'read');
 }
@@ -373,20 +384,29 @@ function renderBookSheet() {
       break;
     }
     case 'imported':
-      actions.append(btn('Start reading', 'primary block', () => openReader(b)),
-        pair(btn('Mark finished', '', () => setStatus(b, 'read')), btn('Choose a different file', '', () => openPicker(b))),
-        enrichBtn);
-      break;
     case 'reading':
-      actions.append(btn('Continue reading', 'primary block', () => openReader(b)),
-        pair(btn('Mark finished', '', () => setStatus(b, 'read')), btn('Choose a different file', '', () => openPicker(b))),
+    case 'read': {
+      // A shelf status like "reading" (e.g. from a Hardcover import) doesn't
+      // guarantee a file is on disk. Without one, offer to fetch a copy.
+      if (b.status === 'read' && !hasFile(b)) {
+        actions.append(btn('Find a download', 'primary block', () => openPicker(b)), enrichBtn);
+        break;
+      }
+      if (!hasFile(b)) {
+        actions.append(
+          btn('Find a download', 'primary block', () => openPicker(b)),
+          pair(btn('Mark unread', '', () => setStatus(b, 'imported')), enrichBtn));
+        break;
+      }
+      const label = b.status === 'read' ? 'Read again' : b.status === 'reading' ? 'Continue reading' : 'Start reading';
+      const second = b.status === 'read'
+        ? btn('Mark unread', '', () => setStatus(b, 'imported'))
+        : btn('Mark finished', '', () => setStatus(b, 'read'));
+      actions.append(btn(label, 'primary block', () => openReader(b)),
+        pair(second, btn('Choose a different file', '', () => openPicker(b))),
         enrichBtn);
       break;
-    case 'read':
-      actions.append(btn('Read again', 'primary block', () => openReader(b)),
-        pair(btn('Mark unread', '', () => setStatus(b, 'imported')), btn('Choose a different file', '', () => openPicker(b))),
-        enrichBtn);
-      break;
+    }
     default:
       actions.append(enrichBtn);
   }
@@ -505,6 +525,11 @@ async function setStatus(b, status) {
 }
 
 async function openReader(b) {
+  if (!hasFile(b)) {
+    toast(`“${b.title}” isn’t downloaded yet — pick a copy first.`);
+    if (typeof openPicker === 'function') openPicker(b);
+    return;
+  }
   if (b.status !== 'reading') {
     try { await api(`/books/${b.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'reading' }) }); } catch {}
   }
@@ -538,9 +563,9 @@ async function openPicker(b) {
   }
 }
 
-// hasFile: a book that's been imported (or read) has a file on disk.
+// hasFile: true when a readable file is on disk (server-reported).
 function hasFile(b) {
-  return b && ['imported', 'reading', 'read'].includes(b.status);
+  return !!(b && b.has_file);
 }
 
 function formatRank(f) {

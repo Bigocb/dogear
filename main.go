@@ -67,6 +67,7 @@ type Book struct {
 	OwnerID     *int64   `json:"owner_id,omitempty"`
 	Private     bool     `json:"private"`
 	AutoGrab    bool     `json:"auto_grab"`
+	HasFile     bool     `json:"has_file"`
 }
 
 type Store struct {
@@ -273,15 +274,23 @@ func (s *Store) migrateMeta() error {
 }
 
 const bookColNames = `id,title,author,isbn,provider,provider_id,cover_url,cover_file,status,added_at,updated_at,description,publisher,publish_year,language,series_name,series_position,genres,page_count,owner_id,private,auto_grab`
-const bookCols = bookColNames
 
-// bookColsP returns the column list prefixed (e.g. "b." for JOINs).
+// hasFileExpr is a correlated subquery reporting whether a book has any
+// imported file on disk. Every book query selects it last so the UI can tell a
+// downloadable record (wanted/reading with no file) from a readable one.
+const hasFileExpr = `EXISTS(SELECT 1 FROM files f WHERE f.book_id=books.id)`
+
+// bookCols selects the book columns plus the has_file flag (table not aliased).
+const bookCols = bookColNames + `, ` + hasFileExpr
+
+// bookColsP returns the columns (with has_file) prefixed, for JOIN queries
+// where the books table is aliased (e.g. `b`).
 func bookColsP(prefix string) string {
 	fields := strings.Split(bookColNames, ",")
 	for i, f := range fields {
 		fields[i] = prefix + f
 	}
-	return strings.Join(fields, ",")
+	return strings.Join(fields, ",") + `, EXISTS(SELECT 1 FROM files f WHERE f.book_id=` + prefix + `id)`
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -294,13 +303,14 @@ func scanBook(sc rowScanner) (Book, error) {
 
 func scanBookRow(sc rowScanner, out *Book) error {
 	var b Book
-	var priv, auto int
+	var priv, auto, hasFile int
 	err := sc.Scan(&b.ID, &b.Title, &b.Author, &b.ISBN, &b.Provider, &b.ProviderID, &b.CoverURL, &b.CoverFile,
 		&b.Status, &b.AddedAt, &b.UpdatedAt,
 		&b.Description, &b.Publisher, &b.PublishYear, &b.Language, &b.SeriesName, &b.SeriesPos, &b.Genres, &b.PageCount,
-		&b.OwnerID, &priv, &auto)
+		&b.OwnerID, &priv, &auto, &hasFile)
 	b.Private = priv != 0
 	b.AutoGrab = auto != 0
+	b.HasFile = hasFile != 0
 	if out != nil {
 		*out = b
 	}
