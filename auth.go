@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS reading_sessions (
   PRIMARY KEY (user_id, book_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_day ON reading_sessions(user_id, day);
+
+-- Imported reading-list items, keyed by the source's remote id, so a re-sync
+-- is idempotent (no duplicates, only new/changed entries are added).
+CREATE TABLE IF NOT EXISTS import_items (
+  user_id     INTEGER NOT NULL,
+  source      TEXT NOT NULL,           -- 'hardcover' | 'goodreads'
+  remote_id   TEXT NOT NULL,           -- provider book id / CSV row key
+  book_id     INTEGER,                 -- linked library book, if created
+  status      TEXT NOT NULL,           -- mapped: wanted | reading | read
+  imported_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, source, remote_id)
+);
+CREATE INDEX IF NOT EXISTS idx_import_user_source ON import_items(user_id, source);
 `)
 	if err != nil {
 		return err

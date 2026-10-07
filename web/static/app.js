@@ -303,7 +303,7 @@ let sheetBook = null;
 
 function openSheet(id) { $(id).hidden = false; document.body.style.overflow = 'hidden'; }
 function closeSheet(id) { $(id).hidden = true; if ($$('.scrim:not([hidden])').length === 0) document.body.style.overflow = ''; }
-for (const id of ['#book-scrim', '#picker-scrim', '#account-scrim']) {
+for (const id of ['#book-scrim', '#picker-scrim', '#account-scrim', '#import-scrim']) {
   $(id).addEventListener('click', (e) => { if (e.target === $(id)) closeSheet(id); });
 }
 document.addEventListener('keydown', (e) => {
@@ -742,12 +742,67 @@ function renderAccount() {
   $$('[data-account]').forEach(b => { b.textContent = initial; b.onclick = () => openSheet('#account-scrim'); });
   $('#account-menu').innerHTML = `
     <div class="who">Signed in as<b>${escapeHtml(me.username)}</b></div>
+    <button id="btn-import">Import reading list…</button>
     ${me.role === 'admin' ? '<a href="/admin">Admin settings</a>' : ''}
     <button id="btn-logout">Sign out</button>`;
   $('#btn-logout').onclick = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     location.href = '/login';
   };
+  $('#btn-import').onclick = () => { closeSheet('#account-scrim'); openImport(); };
+}
+
+// ---------- reading-list import ----------
+
+function openImport() {
+  const s = $('#import-sheet-body');
+  s.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Import your reading list</h2></div>
+    <p class="hint">Bring in books you want to read or are reading. Imports are private to you and never re-added on a second run.</p>
+
+    <div class="intg">
+      <div class="intg-head"><span class="intg-name">Hardcover account</span></div>
+      <label class="priv-toggle"><input type="checkbox" id="imp-auto"> <span>Try to download want-to-read books automatically</span></label>
+      <label class="priv-toggle"><input type="checkbox" id="imp-read" checked> <span>Include books I've already read</span></label>
+      <button class="btn primary" id="imp-hc">Import from Hardcover</button>
+      <div class="hint" id="imp-hc-result" style="margin-top:8px"></div>
+    </div>
+
+    <div class="intg">
+      <div class="intg-head"><span class="intg-name">Goodreads / StoryGraph CSV</span></div>
+      <p class="hint">Export your library as CSV (Goodreads: My Books → Import/Export), then choose the file here.</p>
+      <input class="admin-input" type="file" id="imp-file" accept=".csv,text/csv">
+      <label class="priv-toggle"><input type="checkbox" id="imp-auto2"> <span>Try to download want-to-read books automatically</span></label>
+      <label class="priv-toggle"><input type="checkbox" id="imp-read2" checked> <span>Include books I've already read</span></label>
+      <button class="btn primary" id="imp-csv">Import CSV</button>
+      <div class="hint" id="imp-csv-result" style="margin-top:8px"></div>
+    </div>`;
+  openSheet('#import-scrim');
+
+  const show = (el, res) => {
+    $(el).textContent = `Added ${res.added}, matched existing ${res.existing}, skipped ${res.skipped}${res.failed ? `, failed ${res.failed}` : ''}.`;
+  };
+  $('#imp-hc').onclick = () => run($('#imp-hc'), async () => {
+    const res = await api('/import/hardcover', { method: 'POST', body: JSON.stringify({
+      auto_download: $('#imp-auto').checked, include_read: $('#imp-read').checked,
+    })});
+    show('#imp-hc-result', res);
+    refreshCurrent();
+  });
+  $('#imp-csv').onclick = () => run($('#imp-csv'), async () => {
+    const file = $('#imp-file').files[0];
+    if (!file) { toast('Choose a CSV file first', 'error'); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('auto_download', $('#imp-auto2').checked ? 'true' : 'false');
+    fd.append('include_read', $('#imp-read2').checked ? 'true' : 'false');
+    const res = await fetch('/api/import/csv', { method: 'POST', body: fd }).then(async r => {
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+      return r.json();
+    });
+    show('#imp-csv-result', res);
+    refreshCurrent();
+  });
 }
 
 // ---------- init ----------

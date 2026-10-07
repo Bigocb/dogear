@@ -257,6 +257,12 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanBook(sc rowScanner) (Book, error) {
 	var b Book
+	err := scanBookRow(sc, &b)
+	return b, err
+}
+
+func scanBookRow(sc rowScanner, out *Book) error {
+	var b Book
 	var priv, auto int
 	err := sc.Scan(&b.ID, &b.Title, &b.Author, &b.ISBN, &b.Provider, &b.ProviderID, &b.CoverURL, &b.CoverFile,
 		&b.Status, &b.AddedAt, &b.UpdatedAt,
@@ -264,7 +270,10 @@ func scanBook(sc rowScanner) (Book, error) {
 		&b.OwnerID, &priv, &auto)
 	b.Private = priv != 0
 	b.AutoGrab = auto != 0
-	return b, err
+	if out != nil {
+		*out = b
+	}
+	return err
 }
 
 // applyEnrichment writes metadata from a provider lookup onto a book.
@@ -357,8 +366,12 @@ func (s *Store) addBook(b *Book) (int64, error) {
 	if b.Private {
 		priv = 1
 	}
-	res, err := s.db.Exec(`INSERT INTO books(title,author,isbn,provider,provider_id,cover_url,status,added_at,updated_at,owner_id,private) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		b.Title, b.Author, b.ISBN, b.Provider, b.ProviderID, b.CoverURL, "wanted", now, now, b.OwnerID, priv)
+	auto := 0
+	if b.AutoGrab {
+		auto = 1
+	}
+	res, err := s.db.Exec(`INSERT INTO books(title,author,isbn,provider,provider_id,cover_url,status,added_at,updated_at,owner_id,private,auto_grab) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		b.Title, b.Author, b.ISBN, b.Provider, b.ProviderID, b.CoverURL, "wanted", now, now, b.OwnerID, priv, auto)
 	if err != nil {
 		return 0, err
 	}
@@ -452,6 +465,35 @@ func (s *Store) setAutoGrab(bookID int64, on bool) error {
 	}
 	_, err := s.db.Exec(`UPDATE books SET auto_grab=?, updated_at=strftime('%s','now') WHERE id=?`, v, bookID)
 	return err
+}
+
+// importItemExists reports whether a source item was already imported for a user.
+func (s *Store) importItemExists(userID int64, source, remoteID string) bool {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM import_items WHERE user_id=? AND source=? AND remote_id=?`, userID, source, remoteID).Scan(&n)
+	return n > 0
+}
+
+// recordImport remembers a source item so a re-sync won't duplicate it.
+func (s *Store) recordImport(userID int64, source, remoteID string, bookID int64, status string) error {
+	_, err := s.db.Exec(`INSERT INTO import_items(user_id, source, remote_id, book_id, status, imported_at)
+		VALUES(?,?,?,?,?,strftime('%s','now'))
+		ON CONFLICT(user_id, source, remote_id) DO UPDATE SET book_id=COALESCE(excluded.book_id, import_items.book_id), status=excluded.status`,
+		userID, source, remoteID, bookID, status)
+	return err
+}
+
+// findBookByTitleAuthor returns an existing library book matching title+author
+// (case-insensitive), or nil.
+func (s *Store) findBookByTitleAuthor(title, author string) *Book {
+	var b Book
+	// exact-ish match first, then title-only
+	err := scanBookRow(s.db.QueryRow(`SELECT `+bookCols+` FROM books
+		WHERE lower(title)=lower(?) AND lower(coalesce(author,''))=lower(?) LIMIT 1`, title, author), &b)
+	if err == nil {
+		return &b
+	}
+	return nil
 }
 
 func (s *Store) setProgress(bookID int64, cfi string, percent float64, device string) error {
@@ -2232,6 +2274,8 @@ func main() {
 	mux.HandleFunc("DELETE /api/books/{id}/purge", api.requireAdmin(api.handlePurgeBook))
 	mux.HandleFunc("POST /api/books/{id}/private", api.requireUser(api.handleSetPrivate))
 	mux.HandleFunc("POST /api/books/{id}/auto-grab", api.requireUser(api.handleSetAutoGrab))
+	mux.HandleFunc("POST /api/import/hardcover", api.requireUser(api.handleImportHardcover))
+	mux.HandleFunc("POST /api/import/csv", api.requireUser(api.handleImportCSV))
 	mux.HandleFunc("GET /api/admin/wanted-watch", api.requireAdmin(api.handleWantedWatchStatus))
 	mux.HandleFunc("POST /api/admin/wanted-watch", api.requireAdmin(api.handleWantedWatchStatus))
 	mux.HandleFunc("POST /api/books/{id}/replace", api.requireUser(api.handleReplace))
