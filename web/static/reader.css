@@ -205,7 +205,9 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #pdf-fit button.on { background: var(--gilt, #d1ad66); color: #101216; font-weight: 600; border-color: transparent; }
 
 /* darken PDF pages in night themes by inverting the rendered canvas */
-:root[data-theme="dark"] foliate-view::part(filter),
-:root[data-theme="black"] foliate-view::part(filter) {
+/* (reflowable books are themed through their own styles; inverting them would
+   turn a dark page light and flip any custom colours) */
+:root[data-layout="fixed"][data-theme="dark"] foliate-view::part(filter),
+:root[data-layout="fixed"][data-theme="black"] foliate-view::part(filter) {
   filter: invert(1) hue-rotate(180deg) contrast(0.9) brightness(0.9);
 }
