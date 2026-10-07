@@ -846,6 +846,41 @@ function openImport() {
 window.addEventListener('hashchange', () => showView(location.hash.slice(1), { push: false }));
 
 // service worker (PWA offline)
+// register at /sw.js (the scope is '/', matching the manifest) and prompt for reload
+// when a new version is waiting so users never stay on stale UI after a deploy.
+function showUpdateToast(reload) {
+  if (document.querySelector('.update-toast')) return;
+  const t = document.createElement('div');
+  t.className = 'toast update-toast';
+  t.innerHTML = '<span>New version available.</span><button class="btn small">Reload</button>';
+  t.querySelector('button').onclick = () => {
+    if (reload) reload();
+    t.querySelector('button').textContent = 'Reloading…';
+    t.querySelector('button').disabled = true;
+  };
+  (document.getElementById('toasts') || document.body).appendChild(t);
+}
+
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('/static/sw.js').catch(e => console.warn('sw:', e));
+  navigator.serviceWorker.register('/sw.js')
+    .then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateToast(() => newWorker.postMessage({ type: 'skip-waiting' }));
+          }
+        });
+      });
+    })
+    .catch(e => console.warn('sw:', e));
+
+  // if a new SW already skipped waiting, reload to use it
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
 }

@@ -3,7 +3,7 @@
 // - Book files: cached on successful read, LRU-ish eviction (keep N most recent)
 // - Covers/api: network-first (cheap, tiny)
 
-const VERSION = 'v6'
+const VERSION = 'v7'
 const SHELL_CACHE = `dogear-shell-${VERSION}`
 const BOOK_CACHE = `dogear-books-${VERSION}`
 const KEEP_BOOKS = 5
@@ -40,6 +40,9 @@ self.addEventListener('message', (event) => {
   }
   if (event.data?.type === 'evict-books') {
     event.waitUntil(evictBooks())
+  }
+  if (event.data?.type === 'skip-waiting') {
+    self.skipWaiting()
   }
 })
 

@@ -36,9 +36,11 @@ func serveVersionedHTML(w http.ResponseWriter, path string) {
 	}
 	html := string(data)
 	html = strings.ReplaceAll(html, "/static/app.js\"", "/static/app.js?v="+buildStamp+"\"")
+	html = strings.ReplaceAll(html, "/static/admin.js\"", "/static/admin.js?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/style.css\"", "/static/style.css?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/reader.js\"", "/static/reader.js?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/reader.css\"", "/static/reader.css?v="+buildStamp+"\"")
+	html = strings.ReplaceAll(html, "/static/viewport.js\"", "/static/viewport.js?v="+buildStamp+"\"")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = io.WriteString(w, html)
@@ -2454,9 +2456,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/manifest+json")
 		http.ServeFile(w, r, webDir+"/manifest.json")
 	})
-	// service worker must be served from root scope path
+	// service worker must be served from root scope path; never cache so updates apply immediately
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Service-Worker-Allowed", "/")
+		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(w, r, webDir+"/static/sw.js")
 	})
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
