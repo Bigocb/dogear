@@ -3,18 +3,12 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-func fileSize(path string) int64 {
-	st, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return st.Size()
-}
+func pathExt(p string) string { return filepath.Ext(p) }
 
 // handleAAGrab grabs a book directly from Anna's Archive via donator key.
 // POST /api/aa-grab {link: "<md5 or AA URL>", title, author}
@@ -44,88 +38,91 @@ func (a *apiServer) handleAAGrab(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "could not parse an md5/AA link from input")
 		return
 	}
-
-	// find existing book (dedupe by title+author) or create
 	title := strings.TrimSpace(body.Title)
 	if title == "" {
 		title = "AA " + md5[:8]
 	}
-	bookID := int64(0)
-	existing, _ := a.store.listBooks("", "")
-	for _, b := range existing {
-		if strings.EqualFold(b.Title, title) && strings.EqualFold(b.Author, body.Author) {
-			bookID = b.ID
-			break
-		}
-	}
-	if bookID == 0 {
-		id, err := a.store.addBook(&Book{Title: title, Author: body.Author})
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		bookID = id
+	bookID, err := a.findOrCreateBook(title, body.Author)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	_ = a.store.setStatus(bookID, "grabbed")
 	_ = a.store.addGrab(bookID, "aa-fast:"+md5, "queued")
 
-	dl, err := a.aa.Resolve(r.Context(), md5)
+	dest, err := a.aaDownloadAndImport(r.Context(), md5, title, body.Author)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "AA resolve: "+err.Error())
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-
-	// download to a staging file FIRST (need content/size + maybe cover from
-	// the epub), then move into the library with author/title organization
-	stagingDir := os.Getenv("DOGEAR_AA_STAGING")
-	if stagingDir == "" {
-		stagingDir = "/data/staging"
-	}
-	base := title
-	if body.Author != "" {
-		base = body.Author + " - " + title
-	}
-	staged, err := a.aa.Download(r.Context(), dl, stagingDir, base)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "AA download: "+err.Error())
-		return
-	}
-
-	// organize into library: <Author>/<Title>/
-	author := body.Author
-	if author == "" {
-		author = "AA Grabs"
-	}
-	destDir := filepath.Join(a.importer.Library, sanitize(author), sanitize(title))
-	if err := os.MkdirAll(destDir, 0o775); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	ext := strings.ToLower(filepath.Ext(staged))
-	dest := filepath.Join(destDir, sanitize(title)+ext)
-	if err := os.Rename(staged, dest); err != nil {
-		if err := copyFile(staged, dest); err != nil {
-			writeErr(w, http.StatusInternalServerError, "library move: "+err.Error())
-			return
-		}
-		os.Remove(staged)
-	}
-	// extract cover if epub
-	if ext == ".epub" {
-		if coverData, ctype, cerr := epubCover(dest); cerr == nil && coverData != nil {
-			coverExt := ".jpg"
-			if strings.Contains(ctype, "png") {
-				coverExt = ".png"
-			}
-			_ = os.WriteFile(filepath.Join(destDir, "cover"+coverExt), coverData, 0o644)
-		}
-	}
-	_, _ = a.importer.storeRecord(&Book{ID: bookID, Title: title, Author: author}, dest, strings.TrimPrefix(ext, "."), fileSize(dest), "")
-	// the grabber's shelf gets the book (Netflix model)
+	ext := strings.TrimPrefix(strings.ToLower(pathExt(dest)), ".")
+	_, _ = a.importer.storeRecord(&Book{ID: bookID, Title: title, Author: body.Author}, dest, ext, fileSize(dest), "")
 	if u := userFromCtx(r); u != nil {
 		_ = a.store.shelfAdd(u.ID, bookID, "imported")
 	}
 	_ = a.store.setStatus(bookID, "imported")
 	b, _ := a.store.getBook(bookID)
 	writeJSON(w, http.StatusOK, map[string]any{"book": b, "file": dest, "md5": md5})
+}
+
+// handleLibgenGrab downloads a libgen search result through the AA donator key.
+// POST /api/books/{id}/grab-libgen {md5, title?, author?}
+// This is the captcha-free path: libgen provides search + md5; AA provides the
+// keyed fast download.
+func (a *apiServer) handleLibgenGrab(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if a.aa == nil || a.aa.key() == "" {
+		writeErr(w, http.StatusPreconditionFailed, "AA donator key not configured")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	book, err := a.store.getBook(id)
+	if err != nil || book == nil {
+		writeErr(w, http.StatusNotFound, "book not found")
+		return
+	}
+	var body struct {
+		MD5    string `json:"md5"`
+		Title  string `json:"title"`
+		Author string `json:"author"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.MD5 == "" {
+		writeErr(w, http.StatusBadRequest, "md5 required")
+		return
+	}
+	if !md5Re.MatchString(body.MD5) {
+		writeErr(w, http.StatusBadRequest, "invalid md5")
+		return
+	}
+	title := body.Title
+	if title == "" {
+		title = book.Title
+	}
+	author := body.Author
+	if author == "" {
+		author = book.Author
+	}
+	_ = a.store.setStatus(id, "grabbed")
+	_ = a.store.addGrab(id, "libgen:"+body.MD5, "queued")
+
+	dest, err := a.aaDownloadAndImport(r.Context(), strings.ToLower(body.MD5), title, author)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	ext := strings.TrimPrefix(strings.ToLower(pathExt(dest)), ".")
+	_, _ = a.importer.storeRecord(&Book{ID: id, Title: title, Author: author}, dest, ext, fileSize(dest), "")
+	if u := userFromCtx(r); u != nil {
+		_ = a.store.shelfAdd(u.ID, id, "imported")
+	}
+	_ = a.store.setStatus(id, "imported")
+	b, _ := a.store.getBook(id)
+	writeJSON(w, http.StatusOK, map[string]any{"book": b, "file": dest})
 }

@@ -785,6 +785,7 @@ type apiServer struct {
 	sm       *Shelfmark
 	aa       *AAGrabber
 	prowlarr *Prowlarr
+	libgen   *Libgen
 	importer *Importer
 }
 
@@ -1020,6 +1021,34 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "prowlarr grab: "+err.Error())
 			return
 		}
+	} else if rel.Source == "libgen" {
+		// search found the md5; AA's keyed API downloads it (no captcha)
+		if a.aa == nil || a.aa.key() == "" {
+			writeErr(w, http.StatusPreconditionFailed, "AA donator key not configured")
+			return
+		}
+		md5 := strings.ToLower(rel.SourceID)
+		if !md5Re.MatchString(md5) {
+			writeErr(w, http.StatusBadRequest, "invalid libgen md5")
+			return
+		}
+		b, _ := a.store.getBook(id)
+		title, author := b.Title, b.Author
+		dest, err := a.aaDownloadAndImport(r.Context(), md5, title, author)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		ext := strings.TrimPrefix(strings.ToLower(pathExt(dest)), ".")
+		_, _ = a.importer.storeRecord(&Book{ID: id, Title: title, Author: author}, dest, ext, fileSize(dest), "")
+		_ = a.store.setStatus(id, "imported")
+		if u := userFromCtx(r); u != nil {
+			_ = a.store.shelfAdd(u.ID, id, "imported")
+		}
+		_ = a.store.addGrab(id, "libgen:"+md5, "done")
+		b2, _ := a.store.getBook(id)
+		writeJSON(w, http.StatusOK, map[string]any{"book": b2})
+		return
 	} else {
 		if err := a.sm.Grab(r.Context(), &rel); err != nil {
 			writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
@@ -1156,7 +1185,21 @@ func (a *apiServer) handleBookReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	errors := []srcErr{}
 
-	if book.Provider != nil && book.ProviderID != nil && *book.ProviderID != "" && a.sm != nil {
+	// Libgen search (no captcha) -> md5s that download via the AA key.
+	if a.libgen != nil {
+		q := book.Title
+		if book.Author != "" {
+			q += " " + book.Author
+		}
+		if lg, err := a.libgen.Search(r.Context(), q); err != nil {
+			errors = append(errors, srcErr{Source: "libgen", Error: err.Error()})
+		} else {
+			releases = append(releases, lg...)
+		}
+	}
+	// Shelfmark releases are currently behind AA's captcha; skip unless the
+	// caller explicitly opts in with ?shelfmark=1.
+	if r.URL.Query().Get("shelfmark") == "1" && book.Provider != nil && book.ProviderID != nil && *book.ProviderID != "" && a.sm != nil {
 		sm, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID)
 		if err != nil {
 			errors = append(errors, srcErr{Source: "shelfmark", Error: err.Error()})
@@ -1859,6 +1902,7 @@ func main() {
 	mux.HandleFunc("POST /api/books/{id}/status", api.requireUser(api.handleBookStatus))
 	mux.HandleFunc("POST /api/books/{id}/grab", api.requireUser(api.handleGrab))
 	mux.HandleFunc("POST /api/books/{id}/grab-release", api.requireUser(api.handleGrabRelease))
+	mux.HandleFunc("POST /api/books/{id}/grab-libgen", api.requireUser(api.handleLibgenGrab))
 	mux.HandleFunc("POST /api/books/{id}/add-to-shelf", api.requireUser(api.handleShelfAdd))
 	mux.HandleFunc("GET /api/books/{id}/progress", api.requireUser(api.handleProgress))
 	mux.HandleFunc("PUT /api/books/{id}/progress", api.requireUser(api.handleProgress))
@@ -1949,6 +1993,7 @@ func main() {
 	api.aa = NewAAGrabber(os.Getenv("AA_BASE_URL"), os.Getenv("AA_DONATOR_KEY"), log.New(os.Stderr, "dogear/aa ", log.LstdFlags))
 	api.aa.store = store // so settings can override env later
 	api.prowlarr = NewProwlarr(store, log.New(os.Stderr, "dogear/prowlarr ", log.LstdFlags))
+	api.libgen = NewLibgen(nil, log.New(os.Stderr, "dogear/libgen ", log.LstdFlags))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("dogear listening on %s (db=%s shelfmark=%s library=%s ingests=%v copy=%v)", addr, dbPath, smURL, libraryPath, ingests, copyMode)

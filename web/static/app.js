@@ -481,19 +481,33 @@ function renderReleases(releases) {
     list.innerHTML = '<div class="empty-state"><h3>No downloads found</h3><p>Try again later, or paste an Anna\'s Archive link from the Find tab.</p></div>';
     return;
   }
-  const sorted = [...releases].sort((a, b) => formatRank((b.format || '').toLowerCase()) - formatRank((a.format || '').toLowerCase()));
+  // prefer the free/keyed direct sources (they don't rely on seeds or captchas)
+  const sourceRank = (s) => ({ libgen: 3, 'prowlarr-direct': 2, prowlarr: 1 }[s] || 0);
+  const sorted = [...releases].sort((a, b) =>
+    (sourceRank(b.source) - sourceRank(a.source)) ||
+    (formatRank((b.format || '').toLowerCase()) - formatRank((a.format || '').toLowerCase())));
   for (const r of sorted) {
     const row = document.createElement('button');
     row.className = 'rel-row';
+    const isLibgen = r.source === 'libgen';
+    const badge = isLibgen ? 'MD5 → Anna\'s Archive' : (r.indexer || r.source);
     row.innerHTML = `
       <span class="fmt">${escapeHtml(r.format || '—')}</span>
       <div class="rel-mid">
         <div class="rel-title">${escapeHtml(r.title || r.source_id)}</div>
-        <div class="rel-sub">${escapeHtml([r.indexer, r.size, r.seeders != null ? `${r.seeders} seeders` : '', r.language].filter(Boolean).join(' · '))}</div>
+        <div class="rel-sub">${escapeHtml([badge, r.size, r.seeders != null ? `${r.seeders} seeders` : '', r.extra && r.extra.author, r.language].filter(Boolean).join(' · '))}</div>
       </div>`;
     row.onclick = () => run(row, async () => {
-      await api(`/books/${pickerBook.id}/grab-release`, { method: 'POST', body: JSON.stringify(r) });
-      afterGrab();
+      if (isLibgen) {
+        await api(`/books/${pickerBook.id}/grab-libgen`, { method: 'POST', body: JSON.stringify({
+          md5: r.source_id, title: r.title, author: r.extra && r.extra.author,
+        })});
+        toast(`Downloaded “${r.title}”.`);
+        closeSheet('#picker-scrim'); pickerBook = null; refreshCurrent();
+      } else {
+        await api(`/books/${pickerBook.id}/grab-release`, { method: 'POST', body: JSON.stringify(r) });
+        afterGrab();
+      }
     });
     list.appendChild(row);
   }
