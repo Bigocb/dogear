@@ -67,6 +67,7 @@ type Settings struct {
 	ProwlarrKeySet   bool   `json:"prowlarr_api_key_set"`
 	ProwlarrEnabled  bool   `json:"prowlarr_enabled"`
 	AAKeySet         bool   `json:"aa_donator_key_set"`
+	HardcoverSet     bool   `json:"hardcover_token_set"`
 	AABaseURL        string `json:"aa_base_url"`
 }
 
@@ -79,6 +80,7 @@ func (s *Store) settings() Settings {
 		ProwlarrKeySet:   s.config(cfgProwlarrKey, "PROWLARR_API_KEY", "") != "",
 		ProwlarrEnabled:  s.config(cfgProwlarrOn, "", "") == "true",
 		AAKeySet:         s.config(cfgAAKey, "AA_DONATOR_KEY", "") != "",
+		HardcoverSet:     s.config(cfgHardcoverToken, "", "") != "",
 		AABaseURL:        s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd"),
 	}
 }

@@ -611,13 +611,36 @@ func (a *apiServer) handleEnrich(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b)
 }
 
-// enrichLookup finds metadata for a book: OpenLibrary (keyless) first, then
-// Shelfmark's richer providers (Hardcover) when configured.
+// enrichLookup finds metadata for a book: Hardcover (when a token is set),
+// then OpenLibrary (keyless), then Shelfmark's providers as a last resort.
 func (a *apiServer) enrichLookup(ctx context.Context, query string, book *Book) (*MetaDetail, error) {
+	// If the book came from Hardcover, fetch its detail directly by id.
+	if a.hardcover != nil && a.hardcover.Configured() &&
+		book.Provider != nil && *book.Provider == "hardcover" && book.ProviderID != nil && *book.ProviderID != "" {
+		if d, err := a.hardcover.Detail(ctx, *book.ProviderID); err == nil && d != nil && (d.Description != "" || d.CoverURL != nil) {
+			return d, nil
+		}
+	}
+	if a.hardcover != nil && a.hardcover.Configured() {
+		if results, err := a.hardcover.Search(ctx, query); err == nil && len(results) > 0 {
+			best := results[0]
+			for _, r := range results {
+				if book.Author != "" && strings.Contains(strings.ToLower(r.Author), strings.ToLower(book.Author)) {
+					best = r
+					break
+				}
+			}
+			if d, err := a.hardcover.Detail(ctx, best.BookID); err == nil && d != nil {
+				if d.Title == "" {
+					d.Title = best.Title
+				}
+				return d, nil
+			}
+		}
+	}
 	if a.openlibrary != nil {
 		results, err := a.openlibrary.Search(ctx, query)
 		if err == nil && len(results) > 0 {
-			// choose the best title/author overlap
 			best := results[0]
 			for _, r := range results {
 				if book.Author != "" && strings.Contains(strings.ToLower(r.Author), strings.ToLower(book.Author)) {
@@ -626,9 +649,6 @@ func (a *apiServer) enrichLookup(ctx context.Context, query string, book *Book) 
 				}
 			}
 			if d, err := a.openlibrary.Detail(ctx, best.BookID); err == nil && d != nil {
-				if d.Description == "" {
-					d.Description = ""
-				}
 				return d, nil
 			}
 		}
@@ -943,6 +963,7 @@ type apiServer struct {
 	prowlarr    *Prowlarr
 	libgen      *Libgen
 	openlibrary *OpenLibrary
+	hardcover   *Hardcover
 	importer    *Importer
 	watcher     *WantedWatcher
 }
@@ -1441,7 +1462,14 @@ func (a *apiServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var results []MetadataResult
-	// Primary: OpenLibrary (keyless, works with zero config).
+	// Primary: Hardcover when a token is configured (richest metadata).
+	if a.hardcover != nil && a.hardcover.Configured() {
+		if hc, err := a.hardcover.Search(r.Context(), q); err == nil {
+			results = append(results, hc...)
+		}
+	}
+	// OpenLibrary (keyless, always available) fills gaps and is the default
+	// when no Hardcover token is set.
 	if ol, err := a.openlibrary.Search(r.Context(), q); err == nil {
 		results = append(results, ol...)
 	}
@@ -1667,6 +1695,9 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if v, ok := str("aa_donator_key"); ok {
 			set(cfgAAKey, v)
 		}
+		if v, ok := str("hardcover_token"); ok {
+			set(cfgHardcoverToken, v)
+		}
 		if v, ok := str("aa_base_url"); ok {
 			set(cfgAABaseURL, v)
 		}
@@ -1713,6 +1744,16 @@ func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request
 		}
 		defer resp.Body.Close()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode == 200, "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
+	case "hardcover":
+		if a.hardcover == nil || !a.hardcover.Configured() {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "No token set"})
+			return
+		}
+		if _, err := a.hardcover.Search(r.Context(), "the hobbit"); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": "Token works"})
 	case "aa":
 		key := a.store.aaKey()
 		if key == "" {
@@ -2330,6 +2371,7 @@ func main() {
 	api.prowlarr = NewProwlarr(store, log.New(os.Stderr, "dogear/prowlarr ", log.LstdFlags))
 	api.libgen = NewLibgen(nil, log.New(os.Stderr, "dogear/libgen ", log.LstdFlags))
 	api.openlibrary = NewOpenLibrary(log.New(os.Stderr, "dogear/openlibrary ", log.LstdFlags))
+	api.hardcover = NewHardcover(store, log.New(os.Stderr, "dogear/hardcover ", log.LstdFlags))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("dogear listening on %s (db=%s shelfmark=%s library=%s ingests=%v copy=%v)", addr, dbPath, smURL, libraryPath, ingests, copyMode)

@@ -185,6 +185,11 @@ async function loadSettings() {
   $('#aa-base').value = s.aa_base_url || '';
   $('#aa-state').textContent = s.aa_donator_key_set ? 'Set' : 'Not set';
   $('#aa-state').className = 'intg-state ' + (s.aa_donator_key_set ? 'status-ok' : '');
+
+  $('#hardcover-token').value = '';
+  $('#hardcover-token').placeholder = s.hardcover_token_set ? '•••••• (set — leave blank to keep)' : 'optional';
+  $('#hardcover-state').textContent = s.hardcover_token_set ? 'Set' : 'Using Open Library';
+  $('#hardcover-state').className = 'intg-state ' + (s.hardcover_token_set ? 'status-ok' : '');
 }
 
 $('#save-settings').onclick = async (e) => {
@@ -202,6 +207,7 @@ $('#save-settings').onclick = async (e) => {
     if ($('#prowlarr-key').value) body.prowlarr_api_key = $('#prowlarr-key').value.trim();
     if ($('#shelfmark-pass').value) body.shelfmark_password = $('#shelfmark-pass').value;
     if ($('#aa-key').value) body.aa_donator_key = $('#aa-key').value.trim();
+    if ($('#hardcover-token').value) body.hardcover_token = $('#hardcover-token').value.trim();
     await api('/admin/settings', { method: 'PUT', body: JSON.stringify(body) });
     toast('Sources saved');
     await loadSettings();
