@@ -156,6 +156,61 @@ func TestImporterMatchAndStore(t *testing.T) {
 	}
 }
 
+func TestReconcileFilesRestoresWantedBug(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	owner := int64(1)
+	if err := s.ensureUsersSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO users(id,username,role) VALUES(1,'u','admin')`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.addBook(&Book{Title: "Monster Menu", Author: "Terrell Garrett", OwnerID: &owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// simulate the bug: a file was recorded but the book stayed 'wanted'
+	// with an outstanding grab and no shelf row.
+	if _, err := s.db.Exec(`INSERT INTO files(book_id,path,format,size,imported_at) VALUES(?,?,?,?,1)`,
+		id, "/library/x.epub", "epub", 100); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.addGrab(id, "libgen:abc", "queued")
+
+	n, err := s.reconcileFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("reconciled %d, want 1", n)
+	}
+	b, _ := s.getBook(id)
+	if b.Status != "imported" {
+		t.Fatalf("status = %q, want imported", b.Status)
+	}
+	var state string
+	s.db.QueryRow(`SELECT state FROM grabs WHERE book_id=?`, id).Scan(&state)
+	if state != "done" {
+		t.Fatalf("grab state = %q, want done", state)
+	}
+	if _, _, ok := s.shelfStatus(owner, id); !ok {
+		t.Fatal("owner not shelved after reconcile")
+	}
+
+	// the guard: a later 'wanted' write must not hide a file-backed book
+	if err := s.setStatus(id, "wanted"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = s.getBook(id)
+	if b.Status != "imported" {
+		t.Fatalf("status = %q after guarded setStatus, want imported", b.Status)
+	}
+}
+
 func TestLooksLikePersonName(t *testing.T) {
 	yes := []string{"Logan Jacobs", "Andy Weir", "Frank Herbert", "J. R. R. Tolkien"}
 	no := []string{"Dinosaur World 2", "The Divine Comedy", "Book 3", "Cultivation: Battle Mage Farmer"}

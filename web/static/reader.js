@@ -1,5 +1,6 @@
 import '/vendor/view.js'
 import { Overlayer } from '/vendor/overlayer.js'
+import { textWalker } from '/vendor/text-walker.js'
 import { compare as CFI_compare } from '/vendor/epubcfi.js'
 
 // pdf.js v5 uses Uint8Array.prototype.toHex (a TC39 proposal not yet shipped
@@ -385,7 +386,7 @@ async function loadBookmarks() {
 }
 
 // ---- controls ----
-$('#reader-back').onclick = () => { saveProgress(); location.href = '/#library' }
+$('#reader-back').onclick = () => { saveProgress(); stopTTS(); location.href = '/#library' }
 $('#btn-toc').onclick = () => openNav('toc')
 $('#btn-highlights').onclick = () => openNav(highlights.length || !bookmarks.length ? 'hl' : 'bm')
 $('#btn-bookmark').onclick = toggleBookmark
@@ -394,6 +395,165 @@ $('#btn-settings').onclick = () => openSheet('#type-scrim')
 $('#progress-slider').oninput = (e) => {
   view?.goToFraction(Number(e.target.value) / 100).catch(() => {})
 }
+
+// ---- read-aloud (TTS) ----
+// Sentence-level read-aloud: segment the current document into sentences with
+// Intl.Segmenter (via foliate's text walker, which returns DOM Ranges), speak
+// each with the browser SpeechSynthesis, and highlight it in the book overlay.
+const tts = { on: false, paused: false, rate: 1, list: [], i: -1, gen: 0, doc: null, voices: [], errs: 0 }
+const TTS_RATES = [0.75, 1, 1.25, 1.5, 2, 2.5, 3]
+
+function ttsSegments(doc) {
+  const lang = doc.documentElement?.lang || 'en'
+  const segmenter = new Intl.Segmenter(lang, { granularity: 'sentence' })
+  const out = []
+  const gen = (strs, makeRange) => {
+    const str = strs.join('')
+    let sum = 0, si = -1
+    return (function* () {
+      for (const { index, segment } of segmenter.segment(str)) {
+        const text = segment.replace(/\s+/g, ' ').trim()
+        if (!text) continue
+        while (sum <= index) sum += strs[++si].length
+        const sIdx = si, sOff = index - (sum - strs[si].length)
+        const end = index + segment.length - 1
+        if (end < str.length) while (sum <= end) sum += strs[++si].length
+        const eIdx = si, eOff = end - (sum - strs[si].length) + 1
+        yield [text, makeRange(sIdx, sOff, eIdx, eOff)]
+      }
+    })()
+  }
+  for (const [text, range] of textWalker(doc, gen)) out.push([text, range])
+  return out
+}
+
+function ttsEnsure() {
+  const doc = view?.renderer?.getContents?.()[0]?.doc
+  if (!doc) return false
+  if (tts.doc === doc && tts.list.length) return true
+  tts.doc = doc
+  tts.list = ttsSegments(doc)
+  tts.i = -1
+  return tts.list.length > 0
+}
+
+function ttsOverlayer() { return view?.renderer?.getContents?.()[0]?.overlayer }
+function ttsHighlight(range) {
+  const o = ttsOverlayer()
+  if (!o) return
+  try { o.add('__tts__', range, Overlayer.highlight, { color: HL_COLORS.blue }) } catch {}
+  try { view.renderer.scrollToAnchor?.(range, false) } catch {}
+}
+function clearTTSHighlight() { try { ttsOverlayer()?.remove('__tts__') } catch {} }
+
+function refreshTTSVoices() { tts.voices = speechSynthesis.getVoices?.() || [] }
+if ('speechSynthesis' in window) {
+  refreshTTSVoices()
+  speechSynthesis.addEventListener?.('voiceschanged', refreshTTSVoices)
+}
+
+function ttsFindStart() {
+  const r = view?.lastLocation?.range
+  if (!r) return 0
+  for (let k = 0; k < tts.list.length; k++) {
+    try { if (r.compareBoundaryPoints(Range.END_TO_START, tts.list[k][1]) <= 0) return k } catch {}
+  }
+  return 0
+}
+
+function ttsSpeak() {
+  if (!tts.on) return
+  const item = tts.list[tts.i]
+  if (!item) { stopTTS(); return }
+  const [text, range] = item
+  ttsHighlight(range)
+  const gen = ++tts.gen
+  const u = new SpeechSynthesisUtterance(text)
+  const lang = tts.doc?.documentElement?.lang
+  if (lang) u.lang = lang
+  u.rate = tts.rate
+  const v = tts.voices.find(x => x.lang === lang) ||
+            tts.voices.find(x => x.lang?.startsWith((lang || 'en').slice(0, 2)))
+  if (v) u.voice = v
+  tts.errs = 0
+  u.onend = () => { if (gen === tts.gen && tts.on && !tts.paused) { tts.i++; ttsSpeak() } }
+  u.onerror = () => {
+    if (gen !== tts.gen || !tts.on) return
+    // Engines without a usable voice (some desktops/headless) error out on
+    // every utterance; don't blast through the whole book, just stop.
+    if (++tts.errs >= 3) { stopTTS(); toast('No voice available for read-aloud') ; return }
+    tts.i++; ttsSpeak()
+  }
+  try { speechSynthesis.speak(u) } catch {
+    if (++tts.errs >= 3) { stopTTS(); toast('No voice available for read-aloud'); return }
+    tts.i++; ttsSpeak()
+  }
+}
+
+function ttsNext() {
+  if (!tts.on) return
+  try { speechSynthesis.cancel() } catch {}
+  tts.i = Math.min(tts.i + 1, tts.list.length - 1)
+  tts.paused = false
+  $('#tts-bar').classList.remove('paused')
+  ttsSpeak()
+}
+function ttsPrev() {
+  if (!tts.on) return
+  try { speechSynthesis.cancel() } catch {}
+  tts.i = Math.max(tts.i - 1, 0)
+  tts.paused = false
+  $('#tts-bar').classList.remove('paused')
+  ttsSpeak()
+}
+
+function stopTTS() {
+  tts.on = false; tts.paused = false
+  tts.gen++
+  try { speechSynthesis.cancel() } catch {}
+  clearTTSHighlight()
+  $('#tts-bar').hidden = true
+  $('#btn-tts').setAttribute('aria-pressed', 'false')
+}
+
+function startTTS() {
+  if (!('speechSynthesis' in window)) { toast('This browser can’t read aloud'); return }
+  if (!ttsEnsure()) { toast('Listen works with reflowable books'); return }
+  tts.on = true; tts.paused = false
+  tts.i = ttsFindStart()
+  $('#tts-bar').hidden = false
+  $('#tts-bar').classList.remove('paused')
+  $('#btn-tts').setAttribute('aria-pressed', 'true')
+  ttsSpeak()
+}
+
+function toggleTTS() {
+  if (!tts.on) { startTTS(); return }
+  if (tts.paused) {
+    tts.paused = false
+    $('#tts-bar').classList.remove('paused')
+    try { speechSynthesis.resume() } catch {}
+    if (!speechSynthesis.speaking) ttsSpeak()
+  } else {
+    tts.paused = true
+    $('#tts-bar').classList.add('paused')
+    try { speechSynthesis.pause() } catch {}
+  }
+}
+
+function cycleTTSRate() {
+  const i = TTS_RATES.indexOf(tts.rate)
+  tts.rate = TTS_RATES[(i + 1) % TTS_RATES.length]
+  $('#tts-rate').textContent = `${tts.rate}×`
+  if (tts.on && !tts.paused) { try { speechSynthesis.cancel() } catch {}; ttsSpeak() }
+}
+
+$('#btn-tts').onclick = () => { if (tts.on) stopTTS(); else toggleTTS() }
+$('#tts-play').onclick = toggleTTS
+$('#tts-next').onclick = ttsNext
+$('#tts-prev').onclick = ttsPrev
+$('#tts-rate').onclick = cycleTTSRate
+$('#tts-close').onclick = stopTTS
 
 // ---- typography ----
 const SIZE_STEPS = [70, 80, 90, 100, 110, 120, 135, 150, 170, 200]
@@ -423,6 +583,8 @@ function syncSettingsUI() {
   // PDFs get page-fit controls; reflowable books get typography controls.
   $('#pdf-controls').hidden = !isFixed
   $('#reflow-controls').hidden = isFixed
+  // read-aloud needs reflowable text; hide the control for fixed-layout books
+  $('#btn-tts').hidden = isFixed
   $$('#pdf-fit button').forEach(b => b.classList.toggle('on', b.dataset.fit === String(cfg.pdfZoom)))
 
   const { fg, bg } = themeColors()
