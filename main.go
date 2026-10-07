@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -166,7 +167,7 @@ CREATE TABLE IF NOT EXISTS bookmarks (
 );
 CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
 
--- enrichment columns (nullable; filled from Hardcover/OpenLibrary via Shelfmark)
+-- enrichment columns (nullable; filled from Hardcover/OpenLibrary)
 -- added via ALTER in migrateMeta() for existing DBs
 `)
 	return err
@@ -270,7 +271,7 @@ func scanBook(sc rowScanner) (Book, error) {
 func (s *Store) applyEnrichment(id int64, d *MetaDetail) error {
 	var cover *string
 	if d.CoverURL != nil && *d.CoverURL != "" {
-		// keep the relative shelfmark path; handleCover proxies it
+		// a relative cover path (legacy) -- resolveCoverURL decodes it later
 		cover = d.CoverURL
 	}
 	var genres *string
@@ -570,9 +571,9 @@ func (a *apiServer) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminStatus returns the admin panel data: counts, ingest health,
-// shelfmark/AA status, and recent activity.
+// Hardcover/AA status, and recent activity.
 // handleEnrich fills in description/cover-series metadata for a book using
-// Shelfmark's metadata providers (Hardcover/OpenLibrary).
+// Hardcover/OpenLibrary metadata providers.
 // POST /api/books/{id}/enrich   (single)
 // POST /api/admin/enrich        (batch: enrich books missing a description)
 func (a *apiServer) handleEnrich(w http.ResponseWriter, r *http.Request) {
@@ -612,7 +613,7 @@ func (a *apiServer) handleEnrich(w http.ResponseWriter, r *http.Request) {
 }
 
 // enrichLookup finds metadata for a book: Hardcover (when a token is set),
-// then OpenLibrary (keyless), then Shelfmark's providers as a last resort.
+// then OpenLibrary (keyless).
 func (a *apiServer) enrichLookup(ctx context.Context, query string, book *Book) (*MetaDetail, error) {
 	// If the book came from Hardcover, fetch its detail directly by id.
 	if a.hardcover != nil && a.hardcover.Configured() &&
@@ -652,13 +653,6 @@ func (a *apiServer) enrichLookup(ctx context.Context, query string, book *Book) 
 				return d, nil
 			}
 		}
-	}
-	if a.sm != nil {
-		d, err := a.sm.EnrichSearch(ctx, query, book.Author)
-		if err != nil {
-			return nil, err
-		}
-		return d, nil
 	}
 	return nil, nil
 }
@@ -810,22 +804,15 @@ func (a *apiServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// shelfmark status (best-effort)
-	smStatus := map[string]any{"reachable": false}
-	if resp, err := http.Get(a.sm.base + "/api/health"); err == nil {
-		resp.Body.Close()
-		smStatus["reachable"] = resp.StatusCode == http.StatusOK
-		smStatus["status_code"] = resp.StatusCode
-	}
-
 	aaStatus := map[string]any{"key_configured": a.aa != nil && a.aa.key() != ""}
+	hcStatus := map[string]any{"configured": a.hardcover != nil && a.hardcover.Configured()}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"counts": map[string]any{
 			"books": bookCount, "files": fileCount, "grabs": grabCount,
 		},
 		"activity":    acts,
-		"shelfmark":   smStatus,
+		"hardcover":   hcStatus,
 		"aa":          aaStatus,
 		"ingest_dirs": a.importer.Ingests,
 		"library_dir": a.importer.Library,
@@ -958,7 +945,6 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 type apiServer struct {
 	store       *Store
-	sm          *Shelfmark
 	aa          *AAGrabber
 	prowlarr    *Prowlarr
 	libgen      *Libgen
@@ -1398,10 +1384,8 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"book": b2, "via": via})
 		return
 	} else {
-		if err := a.sm.Grab(r.Context(), &rel); err != nil {
-			writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
-			return
-		}
+		writeErr(w, http.StatusBadRequest, "unsupported release source: "+rel.Source)
+		return
 	}
 	ref := rel.Source + ":" + rel.SourceID
 	if err := a.store.addGrab(id, ref, "queued"); err != nil {
@@ -1473,23 +1457,6 @@ func (a *apiServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if ol, err := a.openlibrary.Search(r.Context(), q); err == nil {
 		results = append(results, ol...)
 	}
-	// Optional: Shelfmark metadata adds Hardcover/GB (richer series data).
-	if a.sm != nil && a.store.config(cfgShelfmarkURL, "SHELFMARK_URL", "") != "" {
-		if raw, err := a.sm.SearchMetadata(r.Context(), q); err == nil {
-			for _, m := range raw {
-				var cov *string
-				if m.CoverURL != nil && *m.CoverURL != "" {
-					full := *m.CoverURL
-					if strings.HasPrefix(full, "/") {
-						full = "/api/shelfmark-cover?path=" + url.QueryEscape(full)
-					}
-					cov = &full
-				}
-				m.CoverURL = cov
-				results = append(results, m)
-			}
-		}
-	}
 	writeJSON(w, http.StatusOK, results)
 }
 
@@ -1519,7 +1486,7 @@ func (a *apiServer) handleBookReleases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// shelfmark releases (metadata-provider keyed) + prowlarr (title-search)
+	// releases merged from libgen (no captcha) and prowlarr (title search)
 	releases := []Release{}
 	type srcErr struct {
 		Source string `json:"source"`
@@ -1527,7 +1494,7 @@ func (a *apiServer) handleBookReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	errors := []srcErr{}
 
-	// Libgen search (no captcha) -> md5s that download via the AA key.
+	// Libgen search (no captcha) -> md5s that download via libgen or the AA key.
 	if a.libgen != nil {
 		q := book.Title
 		if book.Author != "" {
@@ -1537,16 +1504,6 @@ func (a *apiServer) handleBookReleases(w http.ResponseWriter, r *http.Request) {
 			errors = append(errors, srcErr{Source: "libgen", Error: err.Error()})
 		} else {
 			releases = append(releases, lg...)
-		}
-	}
-	// Shelfmark releases are currently behind AA's captcha; skip unless the
-	// caller explicitly opts in with ?shelfmark=1.
-	if r.URL.Query().Get("shelfmark") == "1" && book.Provider != nil && book.ProviderID != nil && *book.ProviderID != "" && a.sm != nil {
-		sm, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID)
-		if err != nil {
-			errors = append(errors, srcErr{Source: "shelfmark", Error: err.Error()})
-		} else {
-			releases = append(releases, sm...)
 		}
 	}
 	// Prowlarr: search by title+author; no metadata-provider id needed.
@@ -1596,9 +1553,13 @@ func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
 	}
 	// 1. search releases across all enabled sources
 	releases := []Release{}
-	if hasProvider {
-		if sm, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID); err == nil {
-			releases = append(releases, sm...)
+	if a.libgen != nil {
+		q := book.Title
+		if book.Author != "" {
+			q += " " + book.Author
+		}
+		if lg, err := a.libgen.Search(r.Context(), q); err == nil {
+			releases = append(releases, lg...)
 		}
 	}
 	if a.prowlarr != nil && a.prowlarr.Configured() {
@@ -1634,8 +1595,24 @@ func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "prowlarr grab: "+err.Error())
 			return
 		}
-	} else if err := a.sm.Grab(r.Context(), pick); err != nil {
-		writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
+	} else if pick.Source == "libgen" {
+		dest, via, err := a.libgenDownloadAndImport(r.Context(), strings.ToLower(pick.SourceID), book.Title, book.Author)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		ext := strings.TrimPrefix(strings.ToLower(pathExt(dest)), ".")
+		_, _ = a.importer.storeRecord(&Book{ID: id, Title: book.Title, Author: book.Author}, dest, ext, fileSize(dest), "")
+		_ = a.store.setStatus(id, "imported")
+		if u := userFromCtx(r); u != nil {
+			_ = a.store.shelfAdd(u.ID, id, "imported")
+		}
+		_ = a.store.addGrab(id, "libgen:"+strings.ToLower(pick.SourceID), "done")
+		b, _ := a.store.getBook(id)
+		writeJSON(w, http.StatusOK, map[string]any{"book": b, "picked": pick, "via": via})
+		return
+	} else {
+		writeErr(w, http.StatusBadRequest, "unsupported release source: "+pick.Source)
 		return
 	}
 	ref := pick.Source + ":" + pick.SourceID
@@ -1677,15 +1654,6 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 				_ = a.store.setConfig(cfgKey, strings.TrimSpace(val))
 			}
 		}
-		if v, ok := str("shelfmark_url"); ok {
-			set(cfgShelfmarkURL, v)
-		}
-		if v, ok := str("shelfmark_user"); ok {
-			set(cfgShelfmarkUser, v)
-		}
-		if v, ok := str("shelfmark_password"); ok {
-			set(cfgShelfmarkPass, v)
-		}
 		if v, ok := str("prowlarr_url"); ok {
 			set(cfgProwlarrURL, v)
 		}
@@ -1716,7 +1684,7 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTestIntegration (admin) pings a configured service.
-// POST /api/admin/test/{service}   service in {shelfmark, prowlarr, aa}
+// POST /api/admin/test/{service}   service in {prowlarr, aa, hardcover}
 func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1735,15 +1703,6 @@ func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("%v %v", st["appName"], st["version"])})
-	case "shelfmark":
-		url := strings.TrimRight(a.store.config(cfgShelfmarkURL, "SHELFMARK_URL", "http://shelfmark:8084"), "/")
-		resp, err := http.Get(url + "/api/health")
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
-			return
-		}
-		defer resp.Body.Close()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode == 200, "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
 	case "hardcover":
 		if a.hardcover == nil || !a.hardcover.Configured() {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "No token set"})
@@ -1806,16 +1765,8 @@ func (a *apiServer) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 2. fall back to proxying the provider cover
-	if b.CoverURL == nil || *b.CoverURL == "" {
-		http.NotFound(w, r)
-		return
-	}
-	coverSrc := *b.CoverURL
-	if strings.HasPrefix(coverSrc, "/") {
-		coverSrc = a.sm.base + coverSrc
-	}
-	if !strings.HasPrefix(coverSrc, "http") {
-		// a relative dogear path (shelfmark proxy) — not fetchable server-side
+	coverSrc := resolveCoverURL(orEmptyStr(b.CoverURL))
+	if coverSrc == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -1829,21 +1780,49 @@ func (a *apiServer) handleCover(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (a *apiServer) handleShelfmarkCover(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	if path == "" || !strings.HasPrefix(path, "/api/covers/") {
-		http.NotFound(w, r)
-		return
+// resolveCoverURL turns a stored cover_url into a fetchable absolute URL.
+// Historically covers were stored as relative dogear proxy paths that embed
+// the real upstream URL, e.g. /api/covers/x?url=<base64> or
+// /api/shelfmark-cover?path=<urlencoded /api/covers/x?url=<base64>>.
+func resolveCoverURL(u string) string {
+	if u == "" {
+		return ""
 	}
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	resp, err := http.Get(a.sm.base + path)
-	if err != nil {
-		http.Error(w, "cover fetch failed", http.StatusBadGateway)
-		return
+	if strings.HasPrefix(u, "http") {
+		return u
 	}
-	defer resp.Body.Close()
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-	_, _ = io.Copy(w, resp.Body)
+	// unwrap the shelfmark proxy layer
+	if strings.HasPrefix(u, "/api/shelfmark-cover") {
+		if parsed, err := url.Parse(u); err == nil {
+			inner := parsed.Query().Get("path")
+			if inner != "" {
+				return resolveCoverURL(inner)
+			}
+		}
+		return ""
+	}
+	// /api/covers/<name>?url=<base64 of the real image url>
+	if strings.HasPrefix(u, "/api/covers/") {
+		if parsed, err := url.Parse(u); err == nil {
+			if b64 := parsed.Query().Get("url"); b64 != "" {
+				if raw, err := base64.StdEncoding.DecodeString(b64); err == nil {
+					return string(raw)
+				}
+				if raw, err := base64.RawURLEncoding.DecodeString(b64); err == nil {
+					return string(raw)
+				}
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+func orEmptyStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // handleContent serves the book file itself to the web reader.
@@ -2208,19 +2187,6 @@ func main() {
 	}
 	_ = libraryPath
 
-	smURL := os.Getenv("SHELFMARK_URL")
-	if smURL == "" {
-		smURL = "http://shelfmark:8084"
-	}
-	sm, err := NewShelfmark(smURL)
-	if err != nil {
-		log.Fatalf("shelfmark client: %v", err)
-	}
-	if u := os.Getenv("SHELFMARK_USER"); u != "" {
-		sm.user = u
-		sm.pass = os.Getenv("SHELFMARK_PASSWORD")
-	}
-
 	store, err := openStore(dbPath)
 	if err != nil {
 		log.Fatalf("store: %v", err)
@@ -2240,7 +2206,7 @@ func main() {
 		log.Printf("cover backfill: linked %d missing covers", n)
 	}
 
-	api := &apiServer{store: store, sm: sm}
+	api := &apiServer{store: store}
 
 	mux := http.NewServeMux()
 	// public routes
@@ -2286,7 +2252,6 @@ func main() {
 	mux.HandleFunc("DELETE /api/bookmarks/{id}", api.requireUser(api.handleBookmarkDelete))
 	mux.HandleFunc("GET /api/search", api.requireUser(api.handleSearch))
 	mux.HandleFunc("GET /api/covers/{id}", api.requireUser(api.handleCover))
-	mux.HandleFunc("GET /api/shelfmark-cover", api.requireUser(api.handleShelfmarkCover))
 	mux.HandleFunc("GET /api/books/{id}/content", api.requireUser(api.handleContent))
 	mux.HandleFunc("POST /api/aa-grab", api.requireUser(api.handleAAGrab))
 	mux.HandleFunc("GET /api/series-group", api.requireUser(api.handleSeriesGrouping))
@@ -2338,7 +2303,7 @@ func main() {
 	}
 	_ = listen
 
-	// ingest watcher: poll Shelfmark's output dir (plus extra sources) and import files
+	// ingest watcher: poll the downloads/ingest dirs and import completed files
 	ingestDir := os.Getenv("DOGEAR_INGEST")
 	if ingestDir == "" {
 		ingestDir = "/ingest"
@@ -2374,7 +2339,7 @@ func main() {
 	api.hardcover = NewHardcover(store, log.New(os.Stderr, "dogear/hardcover ", log.LstdFlags))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("dogear listening on %s (db=%s shelfmark=%s library=%s ingests=%v copy=%v)", addr, dbPath, smURL, libraryPath, ingests, copyMode)
+	log.Printf("dogear listening on %s (db=%s library=%s ingests=%v copy=%v)", addr, dbPath, libraryPath, ingests, copyMode)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

@@ -110,10 +110,8 @@ func (a *apiServer) handleReplace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := a.sm.Grab(r.Context(), &rel); err != nil {
-			writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
-			return
-		}
+		writeErr(w, http.StatusBadRequest, "unsupported release source: "+rel.Source)
+		return
 	}
 	_ = a.store.addGrab(id, "replace:"+rel.Source+":"+rel.SourceID, "queued")
 	b, _ := a.store.getBook(id)

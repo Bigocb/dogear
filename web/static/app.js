@@ -34,10 +34,10 @@ function toast(msg, kind = '') {
 }
 const toastError = (prefix, e) => toast(`${prefix}: ${e.message}`, 'error');
 
-// Shelfmark failures come back as raw Go errors; say what to do instead
-function shelfmarkMessage(e) {
-  if (e.status === 502 || /dial tcp|connection refused|no such host|timeout/i.test(e.message)) {
-    return "Couldn't reach Shelfmark. Check that it's running, then try again.";
+// Friendlier text for network-level failures from the acquisition sources.
+function sourceMessage(e) {
+  if (e.status === 502 || /dial tcp|connection refused|no such host|timeout|deadline/i.test(e.message || '')) {
+    return "Couldn't reach a download source. Check your connection and sources, then try again.";
   }
   return e.message;
 }
@@ -493,7 +493,7 @@ async function enrich() {
     toast('Details updated');
   } catch (e) {
     if (btnEl) btnEl.textContent = 'Fetch details';
-    throw new Error(`Couldn't fetch details. ${shelfmarkMessage(e)}`);
+    throw new Error(`Couldn't fetch details. ${sourceMessage(e)}`);
   }
 }
 
@@ -534,7 +534,7 @@ async function openPicker(b) {
     const { releases } = await api(`/books/${b.id}/releases`);
     renderReleases(releases || []);
   } catch (e) {
-    $('#picker-list').innerHTML = `<div class="empty-state"><h3>Search didn't work</h3><p>${escapeHtml(shelfmarkMessage(e))}</p></div>`;
+    $('#picker-list').innerHTML = `<div class="empty-state"><h3>Search didn't work</h3><p>${escapeHtml(sourceMessage(e))}</p></div>`;
   }
 }
 
@@ -633,7 +633,7 @@ $('#searchform').onsubmit = async (e) => {
     }
     for (const r of results) grid.appendChild(resultTile(r));
   } catch (err) {
-    grid.innerHTML = `<div class="empty-state"><h3>Search didn't work</h3><p>${escapeHtml(shelfmarkMessage(err))}</p></div>`;
+    grid.innerHTML = `<div class="empty-state"><h3>Search didn't work</h3><p>${escapeHtml(sourceMessage(err))}</p></div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Search';

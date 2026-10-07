@@ -136,11 +136,11 @@ function ago(iso) {
 
 async function loadStatus() {
   const s = await api('/admin/status');
-  const sm = s.shelfmark || {};
   const aa = s.aa || {};
+  const hc = s.hardcover || {};
   const counts = s.counts || {};
   $('#sys-status').innerHTML =
-    row('Shelfmark', sm.reachable ? 'Connected' : 'Not reachable', sm.reachable ? 'status-ok' : 'status-bad') +
+    row('Hardcover', hc.configured ? 'Connected' : 'Using Open Library', hc.configured ? 'status-ok' : '') +
     row("Anna's Archive key", aa.key_configured ? 'Set' : 'Not set', aa.key_configured ? 'status-ok' : 'status-bad') +
     row('Books', counts.books ?? '—') +
     row('Book files', counts.files ?? '—') +
@@ -175,11 +175,6 @@ async function loadSettings() {
   $('#prowlarr-state').textContent = s.prowlarr_api_key_set && s.prowlarr_url ? (s.prowlarr_enabled ? 'On' : 'Off') : 'Not configured';
   $('#prowlarr-state').className = 'intg-state ' + (s.prowlarr_api_key_set && s.prowlarr_url && s.prowlarr_enabled ? 'status-ok' : '');
 
-  $('#shelfmark-url').value = s.shelfmark_url || '';
-  $('#shelfmark-user').value = s.shelfmark_user || '';
-  $('#shelfmark-pass').value = '';
-  $('#shelfmark-pass').placeholder = s.shelfmark_password_set ? '•••••• (set — leave blank to keep)' : 'optional';
-
   $('#aa-key').value = '';
   $('#aa-key').placeholder = s.aa_donator_key_set ? '•••••• (set — leave blank to keep)' : 'optional';
   $('#aa-base').value = s.aa_base_url || '';
@@ -199,13 +194,10 @@ $('#save-settings').onclick = async (e) => {
     const body = {
       prowlarr_enabled: $('#prowlarr-enabled').checked,
       prowlarr_url: $('#prowlarr-url').value.trim(),
-      shelfmark_url: $('#shelfmark-url').value.trim(),
-      shelfmark_user: $('#shelfmark-user').value.trim(),
       aa_base_url: $('#aa-base').value.trim(),
     };
     // only send secrets when typed, so blank leaves them untouched
     if ($('#prowlarr-key').value) body.prowlarr_api_key = $('#prowlarr-key').value.trim();
-    if ($('#shelfmark-pass').value) body.shelfmark_password = $('#shelfmark-pass').value;
     if ($('#aa-key').value) body.aa_donator_key = $('#aa-key').value.trim();
     if ($('#hardcover-token').value) body.hardcover_token = $('#hardcover-token').value.trim();
     await api('/admin/settings', { method: 'PUT', body: JSON.stringify(body) });

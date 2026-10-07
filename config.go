@@ -47,41 +47,32 @@ func (s *Store) config(key, envVar, def string) string {
 
 // Config keys used across the app.
 const (
-	cfgShelfmarkURL  = "shelfmark_url"
-	cfgShelfmarkUser = "shelfmark_user"
-	cfgShelfmarkPass = "shelfmark_password"
-	cfgProwlarrURL   = "prowlarr_url"
-	cfgProwlarrKey   = "prowlarr_api_key"
-	cfgProwlarrOn    = "prowlarr_enabled"
-	cfgAAKey         = "aa_donator_key"
-	cfgAABaseURL     = "aa_base_url"
-	cfgSourceOrder   = "release_source_order"
+	cfgProwlarrURL = "prowlarr_url"
+	cfgProwlarrKey = "prowlarr_api_key"
+	cfgProwlarrOn  = "prowlarr_enabled"
+	cfgAAKey       = "aa_donator_key"
+	cfgAABaseURL   = "aa_base_url"
+	cfgSourceOrder = "release_source_order"
 )
 
 // Settings holds the resolved integration configuration.
 type Settings struct {
-	ShelfmarkURL     string `json:"shelfmark_url"`
-	ShelfmarkUser    string `json:"shelfmark_user"`
-	ShelfmarkPassSet bool   `json:"shelfmark_password_set"`
-	ProwlarrURL      string `json:"prowlarr_url"`
-	ProwlarrKeySet   bool   `json:"prowlarr_api_key_set"`
-	ProwlarrEnabled  bool   `json:"prowlarr_enabled"`
-	AAKeySet         bool   `json:"aa_donator_key_set"`
-	HardcoverSet     bool   `json:"hardcover_token_set"`
-	AABaseURL        string `json:"aa_base_url"`
+	ProwlarrURL     string `json:"prowlarr_url"`
+	ProwlarrKeySet  bool   `json:"prowlarr_api_key_set"`
+	ProwlarrEnabled bool   `json:"prowlarr_enabled"`
+	AAKeySet        bool   `json:"aa_donator_key_set"`
+	AABaseURL       string `json:"aa_base_url"`
+	HardcoverSet    bool   `json:"hardcover_token_set"`
 }
 
 func (s *Store) settings() Settings {
 	return Settings{
-		ShelfmarkURL:     s.config(cfgShelfmarkURL, "SHELFMARK_URL", "http://shelfmark:8084"),
-		ShelfmarkUser:    s.config(cfgShelfmarkUser, "SHELFMARK_USER", ""),
-		ShelfmarkPassSet: s.config(cfgShelfmarkPass, "SHELFMARK_PASSWORD", "") != "",
-		ProwlarrURL:      s.config(cfgProwlarrURL, "PROWLARR_URL", ""),
-		ProwlarrKeySet:   s.config(cfgProwlarrKey, "PROWLARR_API_KEY", "") != "",
-		ProwlarrEnabled:  s.config(cfgProwlarrOn, "", "") == "true",
-		AAKeySet:         s.config(cfgAAKey, "AA_DONATOR_KEY", "") != "",
-		HardcoverSet:     s.config(cfgHardcoverToken, "", "") != "",
-		AABaseURL:        s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd"),
+		ProwlarrURL:     s.config(cfgProwlarrURL, "PROWLARR_URL", ""),
+		ProwlarrKeySet:  s.config(cfgProwlarrKey, "PROWLARR_API_KEY", "") != "",
+		ProwlarrEnabled: s.config(cfgProwlarrOn, "", "") == "true",
+		AAKeySet:        s.config(cfgAAKey, "AA_DONATOR_KEY", "") != "",
+		AABaseURL:       s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd"),
+		HardcoverSet:    s.config(cfgHardcoverToken, "", "") != "",
 	}
 }
 

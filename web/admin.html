@@ -28,7 +28,7 @@
 
   <section class="admin-section">
     <h2>Book details</h2>
-    <p class="hint">Look up descriptions, covers, series and publication details for every book that's missing them. Uses Hardcover and Open Library through Shelfmark.</p>
+    <p class="hint">Look up descriptions, covers, series and publication details for every book that's missing them. Uses Hardcover and Open Library.</p>
     <button id="btn-enrich-all" class="btn">Fetch missing details</button>
     <div id="enrich-result" class="hint" style="margin-top:10px"></div>
   </section>
@@ -51,36 +51,6 @@
         <input class="admin-input" id="prowlarr-key" type="password" placeholder="from Prowlarr → Settings → General"></label>
       <button class="btn" data-test="prowlarr">Test connection</button>
       <span class="test-out hint" id="prowlarr-test"></span>
-    </div>
-
-    <div class="intg" id="intg-shelfmark">
-      <div class="intg-head">
-        <span class="intg-name">Shelfmark</span>
-        <span class="intg-state" id="shelfmark-state"></span>
-      </div>
-      <p class="hint">Optional. Adds Anna's Archive / Library Genesis metadata search and release lookup.</p>
-      <label class="field"><span>Shelfmark URL</span>
-        <input class="admin-input" id="shelfmark-url" placeholder="http://shelfmark:8084" autocapitalize="none" autocorrect="off"></label>
-      <label class="field"><span>Username <em>optional</em></span>
-        <input class="admin-input" id="shelfmark-user" autocapitalize="none" autocorrect="off"></label>
-      <label class="field"><span>Password <em>optional</em></span>
-        <input class="admin-input" id="shelfmark-pass" type="password" placeholder="leave blank to keep"></label>
-      <button class="btn" data-test="shelfmark">Test connection</button>
-      <span class="test-out hint" id="shelfmark-test"></span>
-    </div>
-
-    <div class="intg" id="intg-aa">
-      <div class="intg-head">
-        <span class="intg-name">Anna's Archive donator key</span>
-        <span class="intg-state" id="aa-state"></span>
-      </div>
-      <p class="hint">Optional. Lets you paste an AA link to download directly, bypassing the browser challenge.</p>
-      <label class="field"><span>Donator key</span>
-        <input class="admin-input" id="aa-key" type="password" placeholder="leave blank to keep"></label>
-      <label class="field"><span>AA mirror</span>
-        <input class="admin-input" id="aa-base" placeholder="https://annas-archive.gd" autocapitalize="none" autocorrect="off"></label>
-      <button class="btn" data-test="aa">Test key</button>
-      <span class="test-out hint" id="aa-test"></span>
     </div>
 
     <div class="intg" id="intg-hardcover">

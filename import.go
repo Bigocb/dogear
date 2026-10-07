@@ -15,7 +15,7 @@ import (
 
 // Importer organizes completed downloads from ingest dirs into the library.
 type Importer struct {
-	Ingests  []string // watch dirs (shelfmark output, /books, ...)
+	Ingests  []string // watch dirs (downloads output, /books, ...)
 	Library  string   // library root (/library)
 	CopyMode bool     // true = copy files instead of moving (keep originals)
 	minAge   time.Duration
