@@ -247,6 +247,18 @@ func (im *Importer) matchBook(c candidate) *Book {
 
 func (im *Importer) storeRecord(book *Book, path, format string, size int64, coverPath string) (int64, error) {
 	now := time.Now().Unix()
+	// If no cover was passed, look for a cover.<ext> sitting next to the file
+	// (grab flows extract one there) so downloaded books don't lose their cover.
+	if coverPath == "" {
+		dir := filepath.Dir(path)
+		for _, ext := range []string{".jpg", ".jpeg", ".png"} {
+			c := filepath.Join(dir, "cover"+ext)
+			if _, err := os.Stat(c); err == nil {
+				coverPath = c
+				break
+			}
+		}
+	}
 	var id int64
 	// If the caller knows the book (a grab targeting an existing wanted entry),
 	// attach the file to THAT book. Never create a duplicate from a title

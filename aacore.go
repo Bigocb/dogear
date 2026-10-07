@@ -102,7 +102,8 @@ func (a *apiServer) libgenDownloadAndImport(ctx context.Context, md5, title, aut
 	if a.libgen != nil {
 		staged, err = a.libgen.Download(ctx, md5, stagingDir, base)
 		if err == nil {
-			return a.finalizeImport(staged, title, author), "libgen", nil
+			dest, _ := a.finalizeImport(staged, title, author)
+			return dest, "libgen", nil
 		}
 		a.libgen.log.Printf("libgen direct failed (%v); falling back to AA key", err)
 	}
@@ -118,30 +119,36 @@ func (a *apiServer) libgenDownloadAndImport(ctx context.Context, md5, title, aut
 }
 
 // finalizeImport moves a staged file into the library and extracts a cover.
-func (a *apiServer) finalizeImport(staged, title, author string) string {
+// finalizeImport moves a staged file into the library, extracts a cover, and
+// returns (destPath, coverPath). coverPath is "" when no cover was found.
+func (a *apiServer) finalizeImport(staged, title, author string) (string, string) {
 	if author == "" {
 		author = "AA Grabs"
 	}
 	destDir := filepath.Join(a.importer.Library, sanitize(author), sanitize(title))
 	if err := os.MkdirAll(destDir, 0o775); err != nil {
-		return staged
+		return staged, ""
 	}
 	ext := strings.ToLower(filepath.Ext(staged))
 	dest := filepath.Join(destDir, sanitize(title)+ext)
 	if err := os.Rename(staged, dest); err != nil {
 		if err := copyFile(staged, dest); err != nil {
-			return staged
+			return staged, ""
 		}
 		os.Remove(staged)
 	}
+	coverPath := ""
 	if ext == ".epub" {
 		if coverData, ctype, cerr := epubCover(dest); cerr == nil && coverData != nil {
 			coverExt := ".jpg"
 			if strings.Contains(ctype, "png") {
 				coverExt = ".png"
 			}
-			_ = os.WriteFile(filepath.Join(destDir, "cover"+coverExt), coverData, 0o644)
+			coverPath = filepath.Join(destDir, "cover"+coverExt)
+			if err := os.WriteFile(coverPath, coverData, 0o644); err != nil {
+				coverPath = ""
+			}
 		}
 	}
-	return dest
+	return dest, coverPath
 }

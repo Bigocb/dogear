@@ -174,6 +174,43 @@ CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
 
 func (s *Store) close() error { return s.db.Close() }
 
+// backfillCovers links any book that has a cover file on disk beside its
+// imported file but no cover recorded (grab flows used to drop it).
+func (s *Store) backfillCovers() (int, error) {
+	rows, err := s.db.Query(`
+		SELECT b.id, f.path FROM books b JOIN files f ON f.book_id=b.id
+		WHERE (b.cover_file IS NULL OR b.cover_file='')`)
+	if err != nil {
+		return 0, err
+	}
+	type rec struct {
+		id   int64
+		path string
+	}
+	var recs []rec
+	for rows.Next() {
+		var r rec
+		if err := rows.Scan(&r.id, &r.path); err == nil {
+			recs = append(recs, r)
+		}
+	}
+	rows.Close()
+	fixed := 0
+	for _, r := range recs {
+		dir := filepath.Dir(r.path)
+		for _, ext := range []string{".jpg", ".jpeg", ".png"} {
+			c := filepath.Join(dir, "cover"+ext)
+			if _, err := os.Stat(c); err == nil {
+				if _, err := s.db.Exec(`UPDATE books SET cover_file=? WHERE id=?`, c, r.id); err == nil {
+					fixed++
+				}
+				break
+			}
+		}
+	}
+	return fixed, nil
+}
+
 // migrateMeta adds optional metadata-enrichment columns to books.
 func (s *Store) migrateMeta() error {
 	cols := []struct{ name, def string }{
@@ -2154,6 +2191,12 @@ func main() {
 	}
 	if err := store.migrateMeta(); err != nil {
 		log.Fatalf("meta schema: %v", err)
+	}
+	// one-time repair: link cover files left on disk by older grab flows
+	if n, err := store.backfillCovers(); err != nil {
+		log.Printf("cover backfill: %v", err)
+	} else if n > 0 {
+		log.Printf("cover backfill: linked %d missing covers", n)
 	}
 
 	api := &apiServer{store: store, sm: sm}
