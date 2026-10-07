@@ -945,6 +945,9 @@ func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b.OwnerID = &user.ID // whoever adds it owns it
+		// personal-first: books added by a user are private by default. Share
+		// with the household explicitly from the book sheet.
+		b.Private = true
 		// dedupe by provider id when present
 		if b.Provider != nil && b.ProviderID != nil && *b.ProviderID != "" {
 			existing, err := a.store.findBookByProvider(*b.Provider, *b.ProviderID)

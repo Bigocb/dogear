@@ -81,6 +81,7 @@ func (a *apiServer) findOrCreateBook(title, author string, ownerID int64) (int64
 	nb := &Book{Title: title, Author: author}
 	if ownerID != 0 {
 		nb.OwnerID = &ownerID
+		nb.Private = true // personal-first default; share explicitly later
 	}
 	return a.store.addBook(nb)
 }

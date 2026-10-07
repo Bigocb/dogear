@@ -388,18 +388,19 @@ function renderBookSheet() {
       actions.append(enrichBtn);
   }
 
-  // privacy toggle (for books that exist in the library)
+  // sharing toggle: private by default, share explicitly
   const privRow = document.createElement('label');
   privRow.className = 'priv-toggle';
   privRow.innerHTML = `
-    <input type="checkbox" id="priv-check" ${b.private ? 'checked' : ''}>
-    <span>Private — only I can see this</span>`;
+    <input type="checkbox" id="priv-check" ${b.private ? '' : 'checked'}>
+    <span>Share with the household</span>`;
   $('.bk-remove', body).appendChild(privRow);
   $('#priv-check', privRow).onchange = async (e) => {
+    const share = e.target.checked;
     try {
-      await api(`/books/${b.id}/private`, { method: 'POST', body: JSON.stringify({ private: e.target.checked }) });
-      b.private = e.target.checked;
-      toast(e.target.checked ? 'Marked private' : 'Now shared with the household');
+      await api(`/books/${b.id}/private`, { method: 'POST', body: JSON.stringify({ private: !share }) });
+      b.private = !share;
+      toast(share ? 'Shared with the household' : 'Now private');
     } catch (err) {
       e.target.checked = !e.target.checked;
       toast(err.message, 'error');
