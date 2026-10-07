@@ -163,8 +163,73 @@ async function loadStatus() {
     : '<div class="empty">Nothing imported or downloaded yet.</div>';
 }
 
+// ---- acquisition sources (integrations) ----
+
+async function loadSettings() {
+  let s;
+  try { s = await api('/admin/settings'); } catch (e) { return toast(e.message, 'error'); }
+  $('#prowlarr-enabled').checked = !!s.prowlarr_enabled;
+  $('#prowlarr-url').value = s.prowlarr_url || '';
+  $('#prowlarr-key').value = '';
+  $('#prowlarr-key').placeholder = s.prowlarr_api_key_set ? '•••••• (set — leave blank to keep)' : 'from Prowlarr → Settings → General';
+  $('#prowlarr-state').textContent = s.prowlarr_api_key_set && s.prowlarr_url ? (s.prowlarr_enabled ? 'On' : 'Off') : 'Not configured';
+  $('#prowlarr-state').className = 'intg-state ' + (s.prowlarr_api_key_set && s.prowlarr_url && s.prowlarr_enabled ? 'status-ok' : '');
+
+  $('#shelfmark-url').value = s.shelfmark_url || '';
+  $('#shelfmark-user').value = s.shelfmark_user || '';
+  $('#shelfmark-pass').value = '';
+  $('#shelfmark-pass').placeholder = s.shelfmark_password_set ? '•••••• (set — leave blank to keep)' : 'optional';
+
+  $('#aa-key').value = '';
+  $('#aa-key').placeholder = s.aa_donator_key_set ? '•••••• (set — leave blank to keep)' : 'optional';
+  $('#aa-base').value = s.aa_base_url || '';
+  $('#aa-state').textContent = s.aa_donator_key_set ? 'Set' : 'Not set';
+  $('#aa-state').className = 'intg-state ' + (s.aa_donator_key_set ? 'status-ok' : '');
+}
+
+$('#save-settings').onclick = async (e) => {
+  const btn = e.target;
+  btn.disabled = true;
+  try {
+    const body = {
+      prowlarr_enabled: $('#prowlarr-enabled').checked,
+      prowlarr_url: $('#prowlarr-url').value.trim(),
+      shelfmark_url: $('#shelfmark-url').value.trim(),
+      shelfmark_user: $('#shelfmark-user').value.trim(),
+      aa_base_url: $('#aa-base').value.trim(),
+    };
+    // only send secrets when typed, so blank leaves them untouched
+    if ($('#prowlarr-key').value) body.prowlarr_api_key = $('#prowlarr-key').value.trim();
+    if ($('#shelfmark-pass').value) body.shelfmark_password = $('#shelfmark-pass').value;
+    if ($('#aa-key').value) body.aa_donator_key = $('#aa-key').value.trim();
+    await api('/admin/settings', { method: 'PUT', body: JSON.stringify(body) });
+    toast('Sources saved');
+    await loadSettings();
+    loadStatus().catch(() => {});
+  } catch (err) { toast(err.message, 'error'); }
+  finally { btn.disabled = false; }
+};
+
+$$('#admin-root [data-test]').forEach(btn => {
+  btn.onclick = async () => {
+    const svc = btn.dataset.test;
+    const out = $(`#${svc}-test`);
+    btn.disabled = true;
+    out.textContent = 'Testing…';
+    try {
+      const r = await api(`/admin/test/${svc}`, { method: 'POST', body: '{}' });
+      out.textContent = (r.ok ? '✓ ' : '✕ ') + (r.detail || '');
+      out.className = 'test-out hint ' + (r.ok ? 'status-ok' : 'status-bad');
+    } catch (e) {
+      out.textContent = '✕ ' + e.message;
+      out.className = 'test-out hint status-bad';
+    } finally { btn.disabled = false; }
+  };
+});
+
 if (me && me.role === 'admin') {
   loadUsers().catch(e => toast(e.message, 'error'));
+  loadSettings().catch(e => toast(e.message, 'error'));
   loadStatus().catch(e => toast(e.message, 'error'));
 }
 

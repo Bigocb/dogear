@@ -34,6 +34,59 @@
   </section>
 
   <section class="admin-section">
+    <h2>Acquisition sources</h2>
+    <p class="hint">Where Dogear looks for downloads. Files it grabs land in your library automatically.</p>
+
+    <div class="intg" id="intg-prowlarr">
+      <div class="intg-head">
+        <label class="switch">
+          <input type="checkbox" id="prowlarr-enabled">
+          <span>Prowlarr</span>
+        </label>
+        <span class="intg-state" id="prowlarr-state"></span>
+      </div>
+      <label class="field"><span>Prowlarr URL</span>
+        <input class="admin-input" id="prowlarr-url" placeholder="http://prowlarr:9696" autocapitalize="none" autocorrect="off"></label>
+      <label class="field"><span>API key</span>
+        <input class="admin-input" id="prowlarr-key" type="password" placeholder="from Prowlarr → Settings → General"></label>
+      <button class="btn" data-test="prowlarr">Test connection</button>
+      <span class="test-out hint" id="prowlarr-test"></span>
+    </div>
+
+    <div class="intg" id="intg-shelfmark">
+      <div class="intg-head">
+        <span class="intg-name">Shelfmark</span>
+        <span class="intg-state" id="shelfmark-state"></span>
+      </div>
+      <p class="hint">Optional. Adds Anna's Archive / Library Genesis metadata search and release lookup.</p>
+      <label class="field"><span>Shelfmark URL</span>
+        <input class="admin-input" id="shelfmark-url" placeholder="http://shelfmark:8084" autocapitalize="none" autocorrect="off"></label>
+      <label class="field"><span>Username <em>optional</em></span>
+        <input class="admin-input" id="shelfmark-user" autocapitalize="none" autocorrect="off"></label>
+      <label class="field"><span>Password <em>optional</em></span>
+        <input class="admin-input" id="shelfmark-pass" type="password" placeholder="leave blank to keep"></label>
+      <button class="btn" data-test="shelfmark">Test connection</button>
+      <span class="test-out hint" id="shelfmark-test"></span>
+    </div>
+
+    <div class="intg" id="intg-aa">
+      <div class="intg-head">
+        <span class="intg-name">Anna's Archive donator key</span>
+        <span class="intg-state" id="aa-state"></span>
+      </div>
+      <p class="hint">Optional. Lets you paste an AA link to download directly, bypassing the browser challenge.</p>
+      <label class="field"><span>Donator key</span>
+        <input class="admin-input" id="aa-key" type="password" placeholder="leave blank to keep"></label>
+      <label class="field"><span>AA mirror</span>
+        <input class="admin-input" id="aa-base" placeholder="https://annas-archive.gd" autocapitalize="none" autocorrect="off"></label>
+      <button class="btn" data-test="aa">Test key</button>
+      <span class="test-out hint" id="aa-test"></span>
+    </div>
+
+    <button class="btn primary" id="save-settings">Save sources</button>
+  </section>
+
+  <section class="admin-section">
     <h2>System</h2>
     <div id="sys-status"></div>
   </section>

@@ -26,7 +26,7 @@ func (a *apiServer) handleAAGrab(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if a.aa == nil || a.aa.Key == "" {
+	if a.aa == nil || a.aa.key() == "" {
 		writeErr(w, http.StatusPreconditionFailed, "AA_DONATOR_KEY not configured")
 		return
 	}

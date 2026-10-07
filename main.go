@@ -642,7 +642,7 @@ func (a *apiServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		smStatus["status_code"] = resp.StatusCode
 	}
 
-	aaStatus := map[string]any{"key_configured": a.aa != nil && a.aa.Key != ""}
+	aaStatus := map[string]any{"key_configured": a.aa != nil && a.aa.key() != ""}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"counts": map[string]any{
@@ -784,6 +784,7 @@ type apiServer struct {
 	store    *Store
 	sm       *Shelfmark
 	aa       *AAGrabber
+	prowlarr *Prowlarr
 	importer *Importer
 }
 
@@ -1001,9 +1002,29 @@ func (a *apiServer) handleGrabRelease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid release payload")
 		return
 	}
-	if err := a.sm.Grab(r.Context(), &rel); err != nil {
-		writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
-		return
+	// route the grab to the source that produced the release
+	if rel.Source == "prowlarr-direct" {
+		if a.prowlarr == nil || !a.prowlarr.Configured() {
+			writeErr(w, http.StatusPreconditionFailed, "prowlarr not configured")
+			return
+		}
+		idxID := 0
+		if rel.Extra != nil {
+			if v, ok := rel.Extra["indexerId"].(float64); ok {
+				idxID = int(v)
+			}
+		}
+		if err := a.prowlarr.Grab(r.Context(), ProwlarrResult{
+			GUID: rel.SourceID, IndexerID: idxID, Title: rel.Title,
+		}); err != nil {
+			writeErr(w, http.StatusBadGateway, "prowlarr grab: "+err.Error())
+			return
+		}
+	} else {
+		if err := a.sm.Grab(r.Context(), &rel); err != nil {
+			writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
+			return
+		}
 	}
 	ref := rel.Source + ":" + rel.SourceID
 	if err := a.store.addGrab(id, ref, "queued"); err != nil {
@@ -1122,18 +1143,46 @@ func (a *apiServer) handleBookReleases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if book.Provider == nil || book.ProviderID == nil || *book.ProviderID == "" {
-		writeErr(w, http.StatusBadRequest, "book has no provider id; add via search first")
-		return
+		if a.prowlarr == nil || !a.prowlarr.Configured() {
+			writeErr(w, http.StatusBadRequest, "book has no provider id; add via search first, or enable Prowlarr")
+			return
+		}
 	}
-	releases, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "shelfmark releases: "+err.Error())
-		return
+	// shelfmark releases (metadata-provider keyed) + prowlarr (title-search)
+	releases := []Release{}
+	type srcErr struct {
+		Source string `json:"source"`
+		Error  string `json:"error"`
+	}
+	errors := []srcErr{}
+
+	if book.Provider != nil && book.ProviderID != nil && *book.ProviderID != "" && a.sm != nil {
+		sm, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID)
+		if err != nil {
+			errors = append(errors, srcErr{Source: "shelfmark", Error: err.Error()})
+		} else {
+			releases = append(releases, sm...)
+		}
+	}
+	// Prowlarr: search by title+author; no metadata-provider id needed.
+	if a.prowlarr != nil && a.prowlarr.Configured() {
+		q := book.Title
+		if book.Author != "" {
+			q += " " + book.Author
+		}
+		pr, err := a.prowlarr.Search(r.Context(), q, 100)
+		if err != nil {
+			errors = append(errors, srcErr{Source: "prowlarr-direct", Error: err.Error()})
+		} else {
+			for _, pr := range pr {
+				releases = append(releases, normalizeProwlarr(pr))
+			}
+		}
 	}
 	if releases == nil {
 		releases = []Release{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"book": book, "releases": releases})
+	writeJSON(w, http.StatusOK, map[string]any{"book": book, "releases": releases, "errors": errors})
 }
 
 func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
@@ -1155,15 +1204,28 @@ func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "book not found")
 		return
 	}
-	if book.Provider == nil || book.ProviderID == nil || *book.ProviderID == "" {
-		writeErr(w, http.StatusBadRequest, "book has no provider id; add via search first")
+	hasProvider := book.Provider != nil && *book.Provider != "" && book.ProviderID != nil && *book.ProviderID != ""
+	if !hasProvider && (a.prowlarr == nil || !a.prowlarr.Configured()) {
+		writeErr(w, http.StatusBadRequest, "book has no provider id; add via search first, or enable Prowlarr")
 		return
 	}
-	// 1. search releases across sources
-	releases, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "shelfmark releases: "+err.Error())
-		return
+	// 1. search releases across all enabled sources
+	releases := []Release{}
+	if hasProvider {
+		if sm, err := a.sm.SearchReleases(r.Context(), *book.Provider, *book.ProviderID); err == nil {
+			releases = append(releases, sm...)
+		}
+	}
+	if a.prowlarr != nil && a.prowlarr.Configured() {
+		q := book.Title
+		if book.Author != "" {
+			q += " " + book.Author
+		}
+		if pr, err := a.prowlarr.Search(r.Context(), q, 100); err == nil {
+			for _, r := range pr {
+				releases = append(releases, normalizeProwlarr(r))
+			}
+		}
 	}
 	if len(releases) == 0 {
 		writeErr(w, http.StatusNotFound, "no releases found")
@@ -1175,8 +1237,19 @@ func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no ebook-format releases (only audiobooks)")
 		return
 	}
-	// 3. queue it
-	if err := a.sm.Grab(r.Context(), pick); err != nil {
+	// 3. queue it via the source that produced it
+	if pick.Source == "prowlarr-direct" {
+		idxID := 0
+		if pick.Extra != nil {
+			if v, ok := pick.Extra["indexerId"].(float64); ok {
+				idxID = int(v)
+			}
+		}
+		if err := a.prowlarr.Grab(r.Context(), ProwlarrResult{GUID: pick.SourceID, IndexerID: idxID, Title: pick.Title}); err != nil {
+			writeErr(w, http.StatusBadGateway, "prowlarr grab: "+err.Error())
+			return
+		}
+	} else if err := a.sm.Grab(r.Context(), pick); err != nil {
 		writeErr(w, http.StatusBadGateway, "shelfmark grab: "+err.Error())
 		return
 	}
@@ -1189,6 +1262,126 @@ func (a *apiServer) handleGrab(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.shelfAdd(userFromCtx(r).ID, id, "grabbed")
 	b, _ := a.store.getBook(id)
 	writeJSON(w, http.StatusOK, map[string]any{"book": b, "picked": pick})
+}
+
+// handleSettings (admin) reads/writes integration settings.
+// GET  /api/admin/settings   -> current settings (secrets masked)
+// PUT  /api/admin/settings   -> update; empty string clears, absent key = untouched
+func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, a.store.settings())
+	case http.MethodPut:
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		str := func(k string) (string, bool) {
+			v, ok := body[k]
+			if !ok {
+				return "", false
+			}
+			s, _ := v.(string)
+			return s, true
+		}
+		set := func(cfgKey, val string) {
+			if strings.TrimSpace(val) == "" {
+				_ = a.store.deleteConfig(cfgKey)
+			} else {
+				_ = a.store.setConfig(cfgKey, strings.TrimSpace(val))
+			}
+		}
+		if v, ok := str("shelfmark_url"); ok {
+			set(cfgShelfmarkURL, v)
+		}
+		if v, ok := str("shelfmark_user"); ok {
+			set(cfgShelfmarkUser, v)
+		}
+		if v, ok := str("shelfmark_password"); ok {
+			set(cfgShelfmarkPass, v)
+		}
+		if v, ok := str("prowlarr_url"); ok {
+			set(cfgProwlarrURL, v)
+		}
+		if v, ok := str("prowlarr_api_key"); ok {
+			set(cfgProwlarrKey, v)
+		}
+		if v, ok := str("aa_donator_key"); ok {
+			set(cfgAAKey, v)
+		}
+		if v, ok := str("aa_base_url"); ok {
+			set(cfgAABaseURL, v)
+		}
+		if v, ok := body["prowlarr_enabled"]; ok {
+			b, _ := v.(bool)
+			if b {
+				_ = a.store.setConfig(cfgProwlarrOn, "true")
+			} else {
+				_ = a.store.setConfig(cfgProwlarrOn, "false")
+			}
+		}
+		writeJSON(w, http.StatusOK, a.store.settings())
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// handleTestIntegration (admin) pings a configured service.
+// POST /api/admin/test/{service}   service in {shelfmark, prowlarr, aa}
+func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	svc := r.PathValue("service")
+	switch svc {
+	case "prowlarr":
+		if a.prowlarr == nil || !a.prowlarr.Configured() {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "Prowlarr URL or API key not set"})
+			return
+		}
+		st, err := a.prowlarr.Status(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("%v %v", st["appName"], st["version"])})
+	case "shelfmark":
+		url := strings.TrimRight(a.store.config(cfgShelfmarkURL, "SHELFMARK_URL", "http://shelfmark:8084"), "/")
+		resp, err := http.Get(url + "/api/health")
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode == 200, "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
+	case "aa":
+		key := a.store.aaKey()
+		if key == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "Donator key not set"})
+			return
+		}
+		base := strings.TrimRight(a.store.aaBaseURL(), "/")
+		// cheap validity probe: invalid md5 => "Invalid secret key" means the key is bad
+		u := base + "/dyn/api/fast_download.json?md5=00000000000000000000000000000000&key=" + url.QueryEscape(key)
+		req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if strings.Contains(string(body), "Invalid secret key") {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "Invalid secret key"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": "Key accepted"})
+	default:
+		writeErr(w, http.StatusNotFound, "unknown service")
+	}
 }
 
 func (a *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -1653,6 +1846,9 @@ func main() {
 	mux.HandleFunc("PUT /api/admin/users/{id}", api.requireAdmin(api.handleUser))
 	mux.HandleFunc("DELETE /api/admin/users/{id}", api.requireAdmin(api.handleUser))
 	mux.HandleFunc("GET /api/admin/status", api.requireAdmin(api.handleAdminStatus))
+	mux.HandleFunc("GET /api/admin/settings", api.requireAdmin(api.handleSettings))
+	mux.HandleFunc("PUT /api/admin/settings", api.requireAdmin(api.handleSettings))
+	mux.HandleFunc("POST /api/admin/test/{service}", api.requireAdmin(api.handleTestIntegration))
 
 	// per-user data (must be behind auth)
 	mux.HandleFunc("GET /api/books", api.requireUser(api.handleBooks))
@@ -1751,6 +1947,8 @@ func main() {
 	importerAPI := api
 	importerAPI.importer = importer
 	api.aa = NewAAGrabber(os.Getenv("AA_BASE_URL"), os.Getenv("AA_DONATOR_KEY"), log.New(os.Stderr, "dogear/aa ", log.LstdFlags))
+	api.aa.store = store // so settings can override env later
+	api.prowlarr = NewProwlarr(store, log.New(os.Stderr, "dogear/prowlarr ", log.LstdFlags))
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("dogear listening on %s (db=%s shelfmark=%s library=%s ingests=%v copy=%v)", addr, dbPath, smURL, libraryPath, ingests, copyMode)

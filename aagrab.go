@@ -19,8 +19,27 @@ import (
 type AAGrabber struct {
 	Base   string
 	Key    string
+	store  *Store // when set, resolve base/key from settings (UI-configurable)
 	client *http.Client
 	log    *log.Logger
+}
+
+func (a *AAGrabber) base() string {
+	if a.store != nil {
+		if v := a.store.aaBaseURL(); v != "" {
+			return strings.TrimRight(v, "/")
+		}
+	}
+	return strings.TrimRight(a.Base, "/")
+}
+
+func (a *AAGrabber) key() string {
+	if a.store != nil {
+		if v := a.store.aaKey(); v != "" {
+			return v
+		}
+	}
+	return a.Key
 }
 
 func NewAAGrabber(base, key string, logf *log.Logger) *AAGrabber {
@@ -58,10 +77,10 @@ type fastDownloadResp struct {
 
 // Resolve asks AA for the fast download URL for an md5.
 func (a *AAGrabber) Resolve(ctx context.Context, md5 string) (string, error) {
-	if a.Key == "" {
+	if a.key() == "" {
 		return "", fmt.Errorf("AA donator key not configured")
 	}
-	u := fmt.Sprintf("%s/dyn/api/fast_download.json?md5=%s&key=%s", a.Base, url.QueryEscape(md5), url.QueryEscape(a.Key))
+	u := fmt.Sprintf("%s/dyn/api/fast_download.json?md5=%s&key=%s", a.base(), url.QueryEscape(md5), url.QueryEscape(a.key()))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err

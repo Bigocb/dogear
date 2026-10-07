@@ -389,3 +389,16 @@ main {
 .act-row .what { font-family: var(--serif); overflow-wrap: anywhere; }
 .act-row .when { grid-column: 2; color: var(--paper-faint); font-size: .76rem; }
 .empty { color: var(--paper-dim); padding: 12px 0; }
+
+/* acquisition sources (admin integrations) */
+.intg { border: 1px solid var(--rule); border-radius: 12px; padding: 14px 16px; margin: 14px 0; background: var(--board-2); display: flex; flex-direction: column; gap: 12px; }
+.intg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.intg-name { font-family: var(--serif); font-size: 1.05rem; }
+.intg-state { font-size: .78rem; color: var(--paper-faint); letter-spacing: .04em; text-transform: uppercase; }
+.intg-state.status-ok { color: var(--sage); }
+.intg .field { font-size: .85rem; }
+.switch { display: inline-flex; align-items: center; gap: 9px; font-family: var(--serif); font-size: 1.05rem; cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--gilt); }
+.test-out { display: inline-block; margin-top: 2px; }
+.test-out.status-ok { color: var(--sage); }
+.test-out.status-bad { color: var(--oxblood); }
