@@ -70,6 +70,7 @@ function themeColors() {
   return { fg: cfg.fg || THEMES[cfg.theme]?.fg || '#e8e8ea', bg: cfg.bg || THEMES[cfg.theme]?.bg || '#14161a' }
 }
 applyConfig()
+applyPageColor()
 
 window.onerror = () => { /* handled in main().catch; ignore stray Safari aborts */ }
 
@@ -758,7 +759,14 @@ function renderVoicePicker() {
 }
 $('#set-voice').onchange = e => { cfg.ttsVoice = e.target.value; saveConfig(); renderVoicePicker() }
 
+// the area around the book (margins, status-bar strip) takes the page colour;
+// the reader's controls keep the app palette from reader.css
+function applyPageColor() {
+  document.documentElement.style.setProperty('--page', themeColors().bg)
+}
+
 function applyTypography() {
+  applyPageColor()
   if (isFixed) return // fixed-layout (PDF): pages don't reflow
   try { view.renderer.setStyles?.(getStyles()) } catch {}
 }

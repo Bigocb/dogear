@@ -1,7 +1,10 @@
-/* Reader chrome follows the reading theme so the page never flashes another colour. */
+/* Reader controls always use the app's own palette; only the book page takes the
+   reading theme. --page is the page colour (theme or custom), set by reader.js, so
+   the margins and status-bar area blend with the book. */
 :root {
-  --bg: #14161a; --fg: #e8e8ea; --muted: #9a958b; --card: #1d2027; --raised: #272b33;
-  --rule: rgba(255,255,255,.09); --accent: #d1ad66; --accent-ink: #1d1609;
+  --bg: #13161c; --fg: #ece6da; --muted: #a39d91; --card: #1b1f27; --raised: #242a34;
+  --rule: #2e3542; --accent: #d1ad66; --accent-ink: #1d1609;
+  --page: #14161a;
   --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
   --serif: "New York", ui-serif, "Iowan Old Style", Georgia, serif;
   --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px);
@@ -9,20 +12,11 @@
   font-family: var(--sans);
   color-scheme: dark;
 }
-[data-theme="black"] { --bg: #000; --fg: #c9c9c9; --card: #121212; --raised: #1f1f1f; }
-[data-theme="sepia"] {
-  --bg: #f4ecd8; --fg: #4c3d2e; --muted: #8b7355; --card: #ebe0c6; --raised: #dfd1b1;
-  --rule: rgba(76,61,46,.14); --accent: #94682a; --accent-ink: #fff8ea; color-scheme: light;
-}
-[data-theme="light"] {
-  --bg: #ffffff; --fg: #222; --muted: #77736c; --card: #f4f2ee; --raised: #e7e4de;
-  --rule: rgba(0,0,0,.09); --accent: #94682a; --accent-ink: #fff; color-scheme: light;
-}
 
 * { box-sizing: border-box; margin: 0; }
 [hidden] { display: none !important; }
 html, body { height: 100%; overflow: hidden; }
-body { background: var(--bg); color: var(--fg); -webkit-tap-highlight-color: transparent; }
+body { background: var(--page); color: var(--fg); -webkit-tap-highlight-color: transparent; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
