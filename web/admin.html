@@ -70,6 +70,30 @@
   </section>
 
   <section class="admin-section">
+    <h2>Audiobookshelf</h2>
+    <p class="hint">Link Dogear to your Audiobookshelf server. Matched books get an "Audiobook" chip and a "Continue listening" shortcut if you're further along there.</p>
+    <div class="intg" id="intg-abs">
+      <div class="intg-head">
+        <label class="switch">
+          <input type="checkbox" id="abs-enabled">
+          <span>Enabled</span>
+        </label>
+        <span class="intg-state" id="abs-state"></span>
+      </div>
+      <label class="field"><span>ABS URL</span>
+        <input class="admin-input" id="abs-url" placeholder="https://abs.example.com" autocapitalize="none" autocorrect="off"></label>
+      <label class="field"><span>API token</span>
+        <input class="admin-input" id="abs-key" type="password" placeholder="from ABS → Settings → Users → your user"></label>
+      <label class="field"><span>Library</span>
+        <select class="admin-input" id="abs-library"></select></label>
+      <button class="btn" data-test="abs">Test connection</button>
+      <span class="test-out hint" id="abs-test"></span>
+      <button class="btn" id="btn-abs-sync" style="margin-top:8px">Sync now</button>
+      <span class="test-out hint" id="abs-sync-result"></span>
+    </div>
+  </section>
+
+  <section class="admin-section">
     <h2>Read-aloud</h2>
     <p class="hint">Self-hosted neural voice engine (Piper). Gives everyone a natural, consistent voice while reading, even offline. Defaults to the bundled <code>dogear-tts</code> service.</p>
     <div class="intg" id="intg-tts">

@@ -70,6 +70,19 @@ type Book struct {
 	Private     bool     `json:"private"`
 	AutoGrab    bool     `json:"auto_grab"`
 	HasFile     bool     `json:"has_file"`
+	ABSAudio    *ABSAudio `json:"abs,omitempty"`
+}
+
+// ABSAudio is the audiobook link + progress surfaced on a Book.
+type ABSAudio struct {
+	ItemID   string  `json:"item_id"`
+	Library  string  `json:"library_id"`
+	URL      string  `json:"url"`
+	Duration float64 `json:"duration"`
+	Current  float64 `json:"current_time"`
+	Progress float64 `json:"progress"`
+	Finished bool    `json:"is_finished"`
+	LastSync int64   `json:"last_sync"`
 }
 
 type Store struct {
@@ -627,6 +640,7 @@ func (a *apiServer) handleHome(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	all = a.attachABSAudio(all)
 	percents := map[int64]float64{}
 	for _, b := range all {
 		if _, pct, err := a.store.getProgressForUser(userFromCtx(r).ID, b.ID); err == nil {
@@ -898,6 +912,9 @@ func (a *apiServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 
 	aaStatus := map[string]any{"key_configured": a.aa != nil && a.aa.key() != ""}
 	hcStatus := map[string]any{"configured": a.hardcover != nil && a.hardcover.Configured()}
+	var absCount int64
+	_ = a.store.db.QueryRow(`SELECT COUNT(*) FROM abs_items WHERE book_id IS NOT NULL`).Scan(&absCount)
+	absStatus := map[string]any{"configured": a.abs != nil && a.abs.Configured(), "matched": absCount}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"counts": map[string]any{
@@ -906,6 +923,7 @@ func (a *apiServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		"activity":    acts,
 		"hardcover":   hcStatus,
 		"aa":          aaStatus,
+		"abs":         absStatus,
 		"ingest_dirs": a.importer.Ingests,
 		"library_dir": a.importer.Library,
 		"copy_mode":   a.importer.CopyMode,
@@ -1039,6 +1057,7 @@ type apiServer struct {
 	store       *Store
 	aa          *AAGrabber
 	prowlarr    *Prowlarr
+	abs         *ABS
 	libgen      *Libgen
 	openlibrary *OpenLibrary
 	hardcover   *Hardcover
@@ -1063,36 +1082,38 @@ func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
 		}
 		// household=1 -> browse shared library (books not on shelf)
 		if r.URL.Query().Get("household") == "1" {
-			books, err := a.store.unshelvedBooks(user.ID, q)
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if books == nil {
-				books = []Book{}
-			}
-			writeJSON(w, http.StatusOK, books)
-			return
-		}
-		books, err := a.store.shelfBooks(user.ID, q)
+		books, err := a.store.unshelvedBooks(user.ID, q)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// optional per-status filter (applied client-side too, but keep API parity)
-		if status != "" {
-			var filtered []Book
-			for _, b := range books {
-				if b.Status == status {
-					filtered = append(filtered, b)
-				}
-			}
-			books = filtered
-		}
+		books = a.attachABSAudio(books)
 		if books == nil {
 			books = []Book{}
 		}
 		writeJSON(w, http.StatusOK, books)
+		return
+	}
+	books, err := a.store.shelfBooks(user.ID, q)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	books = a.attachABSAudio(books)
+	// optional per-status filter (applied client-side too, but keep API parity)
+	if status != "" {
+		var filtered []Book
+		for _, b := range books {
+			if b.Status == status {
+				filtered = append(filtered, b)
+			}
+		}
+		books = filtered
+	}
+	if books == nil {
+		books = []Book{}
+	}
+	writeJSON(w, http.StatusOK, books)
 	case http.MethodPost:
 		var b Book
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
@@ -1166,6 +1187,17 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 		if user != nil {
 			if status, _, ok := a.store.shelfStatus(user.ID, id); ok {
 				b.Status = status
+			}
+		}
+		if ab, err := a.store.absItemForBook(id); err == nil && ab != nil {
+			b.ABSAudio = &ABSAudio{
+				ItemID:   ab.itemID,
+				Library:  ab.libraryID,
+				Duration: ab.duration,
+				Current:  ab.currentTime,
+				Progress: ab.progress,
+				Finished: ab.isFinished,
+				LastSync: ab.lastSync,
 			}
 		}
 		writeJSON(w, http.StatusOK, b)
@@ -1764,12 +1796,29 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if v, ok := str("tts_url"); ok {
 			set(cfgTTSUrl, v)
 		}
+		if v, ok := str("abs_url"); ok {
+			set(cfgABSURL, v)
+		}
+		if v, ok := str("abs_api_key"); ok {
+			set(cfgABSKey, v)
+		}
+		if v, ok := str("abs_library_id"); ok {
+			set(cfgABSLibrary, v)
+		}
 		if v, ok := body["prowlarr_enabled"]; ok {
 			b, _ := v.(bool)
 			if b {
 				_ = a.store.setConfig(cfgProwlarrOn, "true")
 			} else {
 				_ = a.store.setConfig(cfgProwlarrOn, "false")
+			}
+		}
+		if v, ok := body["abs_enabled"]; ok {
+			b, _ := v.(bool)
+			if b {
+				_ = a.store.setConfig(cfgABSOn, "true")
+			} else {
+				_ = a.store.setConfig(cfgABSOn, "false")
 			}
 		}
 		writeJSON(w, http.StatusOK, a.store.settings())
@@ -1779,7 +1828,7 @@ func (a *apiServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTestIntegration (admin) pings a configured service.
-// POST /api/admin/test/{service}   service in {prowlarr, aa, hardcover}
+// POST /api/admin/test/{service}   service in {prowlarr, aa, hardcover, abs}
 func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1833,7 +1882,7 @@ func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": "Key accepted"})
 	case "tts":
 		base := a.store.ttsURL()
-		resp, err := a.ttsClient().Get(base + "/health")
+		resp, err := a.ttsClient().Get(base + "/voices")
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
 			return
@@ -1843,15 +1892,84 @@ func (a *apiServer) handleTestIntegration(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": fmt.Sprintf("HTTP %d", resp.StatusCode)})
 			return
 		}
-		var h struct {
-			OK     bool `json:"ok"`
-			Voices int  `json:"voices"`
+		var v struct {
+			Voices []any `json:"voices"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&h)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("engine up · %d voices", h.Voices)})
+		_ = json.NewDecoder(resp.Body).Decode(&v)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("engine up · %d voices", len(v.Voices))})
+	case "abs":
+		if a.abs == nil || !a.abs.Configured() {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": "Audiobookshelf URL or API key not set"})
+			return
+		}
+		st, err := a.abs.Status(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": fmt.Sprintf("%v", st["library"])})
 	default:
 		writeErr(w, http.StatusNotFound, "unknown service")
 	}
+}
+
+// handleABSLibraries returns the ABS libraries the configured token can see.
+// GET /api/admin/abs/libraries
+func (a *apiServer) handleABSLibraries(w http.ResponseWriter, r *http.Request) {
+	if a.abs == nil || !a.abs.Configured() {
+		writeErr(w, http.StatusBadRequest, "audiobookshelf not configured")
+		return
+	}
+	libs, err := a.abs.Libraries(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": libs})
+}
+
+// handleABSSync triggers a pull of audiobooks from ABS and matches them to Dogear books.
+// POST /api/admin/abs/sync
+func (a *apiServer) handleABSSync(w http.ResponseWriter, r *http.Request) {
+	if a.abs == nil || !a.abs.Configured() {
+		writeErr(w, http.StatusBadRequest, "audiobookshelf not configured")
+		return
+	}
+	synced, matched, err := a.abs.Sync(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"synced": synced, "matched": matched})
+}
+
+// handleSeriesNext returns the next unread book in the same series as the given book.
+// GET /api/books/{id}/series-next
+func (a *apiServer) handleSeriesNext(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	user := userFromCtx(r)
+	if user != nil && !a.store.canAccessBook(user.ID, id) {
+		writeErr(w, http.StatusNotFound, "book not available")
+		return
+	}
+	var userID int64
+	if user != nil {
+		userID = user.ID
+	}
+	next, err := a.store.seriesNextBook(userID, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if next == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"next": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"next": next})
 }
 
 func (a *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -2233,6 +2351,7 @@ func (a *apiServer) handleSeriesGrouping(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	books = a.attachABSAudio(books)
 	type seriesBook struct {
 		ID     int64   `json:"id"`
 		Title  string  `json:"title"`
@@ -2363,6 +2482,9 @@ func main() {
 	if err := store.migrateMeta(); err != nil {
 		log.Fatalf("meta schema: %v", err)
 	}
+	if err := store.migrateABS(); err != nil {
+		log.Fatalf("abs schema: %v", err)
+	}
 	// one-time repair: link cover files left on disk by older grab flows
 	if n, err := store.backfillCovers(); err != nil {
 		log.Printf("cover backfill: %v", err)
@@ -2393,6 +2515,8 @@ func main() {
 	mux.HandleFunc("GET /api/admin/settings", api.requireAdmin(api.handleSettings))
 	mux.HandleFunc("PUT /api/admin/settings", api.requireAdmin(api.handleSettings))
 	mux.HandleFunc("POST /api/admin/test/{service}", api.requireAdmin(api.handleTestIntegration))
+	mux.HandleFunc("GET /api/admin/abs/libraries", api.requireAdmin(api.handleABSLibraries))
+	mux.HandleFunc("POST /api/admin/abs/sync", api.requireAdmin(api.handleABSSync))
 
 	// per-user data (must be behind auth)
 	mux.HandleFunc("GET /api/books", api.requireUser(api.handleBooks))
@@ -2422,6 +2546,7 @@ func main() {
 	mux.HandleFunc("GET /api/books/{id}/bookmarks", api.requireUser(api.handleBookmarks))
 	mux.HandleFunc("POST /api/books/{id}/bookmarks", api.requireUser(api.handleBookmarks))
 	mux.HandleFunc("DELETE /api/bookmarks/{id}", api.requireUser(api.handleBookmarkDelete))
+	mux.HandleFunc("GET /api/books/{id}/series-next", api.requireUser(api.handleSeriesNext))
 	mux.HandleFunc("GET /api/search", api.requireUser(api.handleSearch))
 	mux.HandleFunc("GET /api/covers/{id}", api.requireUser(api.handleCover))
 	mux.HandleFunc("GET /api/books/{id}/content", api.requireUser(api.handleContent))
@@ -2507,7 +2632,8 @@ func main() {
 	importerAPI := api
 	importerAPI.importer = importer
 	api.aa = NewAAGrabber(os.Getenv("AA_BASE_URL"), os.Getenv("AA_DONATOR_KEY"), log.New(os.Stderr, "dogear/aa ", log.LstdFlags))
-	api.aa.store = store // so settings can override env later
+
+	api.abs = NewABS(store, log.New(os.Stderr, "dogear/abs ", log.LstdFlags))
 	api.prowlarr = NewProwlarr(store, log.New(os.Stderr, "dogear/prowlarr ", log.LstdFlags))
 	api.libgen = NewLibgen(nil, log.New(os.Stderr, "dogear/libgen ", log.LstdFlags))
 	api.openlibrary = NewOpenLibrary(log.New(os.Stderr, "dogear/openlibrary ", log.LstdFlags))

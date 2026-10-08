@@ -123,6 +123,9 @@ function bookTile(b, { onClick } = {}) {
   } else if (!b.has_file && (b.status === 'reading' || b.status === 'imported' || b.status === 'read')) {
     el.insertAdjacentHTML('beforeend', `<div class="bs">No copy yet</div>`);
   }
+  if (b.abs?.item_id) {
+    el.insertAdjacentHTML('beforeend', `<div class="abs-badge" title="Audiobook available"></div>`);
+  }
   el.onclick = onClick || (() => openBook(b));
   return el;
 }
@@ -367,6 +370,33 @@ function renderBookSheet() {
   const pair = (...els) => { const d = document.createElement('div'); d.className = 'pair'; els.forEach(e => d.appendChild(e)); return d; };
   const enrichBtn = btn('Fetch details', '', enrich);
 
+  // Audiobookshelf chip: opens ABS web UI to the matched item.
+  if (b.abs?.item_id) {
+    const chip = document.createElement('a');
+    chip.className = 'abs-chip';
+    chip.href = b.abs.url || '#';
+    chip.target = '_blank';
+    chip.rel = 'noopener';
+    const pct = b.abs.is_finished ? 'Finished' : `${Math.round((b.abs.progress || 0) * 100)}%`;
+    chip.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg><span>Audiobook · ${pct}</span>`;
+    $('.bk-cover', body).appendChild(chip);
+  }
+
+  // Series "next" button: only if the book is in a series and there's another unread book.
+  if (b.series_name) {
+    const nextBtn = btn('Next in series', 'secondary block', async () => {
+      try {
+        const r = await api(`/books/${b.id}/series-next`);
+        if (r.next) {
+          openBook(r.next);
+        } else {
+          toast('No next book in this series');
+        }
+      } catch (e) { toast(e.message, 'error'); }
+    });
+    actions.append(nextBtn);
+  }
+
   switch (b.status) {
     case 'library':
       actions.append(btn('Add to my shelf', 'primary block', async () => {
@@ -398,13 +428,23 @@ function renderBookSheet() {
           pair(btn('Mark unread', '', () => setStatus(b, 'imported')), enrichBtn));
         break;
       }
-      const label = b.status === 'read' ? 'Read again' : b.status === 'reading' ? 'Continue reading' : 'Start reading';
-      const second = b.status === 'read'
-        ? btn('Mark unread', '', () => setStatus(b, 'imported'))
-        : btn('Mark finished', '', () => setStatus(b, 'read'));
-      actions.append(btn(label, 'primary block', () => openReader(b)),
-        pair(second, btn('Choose a different file', '', () => openPicker(b))),
-        enrichBtn);
+      const textPct = (percents.get(b.id) || 0) / 100;
+      const audioPct = b.abs?.progress || 0;
+      const furtherInAudio = b.abs?.item_id && !b.abs?.is_finished && audioPct > textPct + 0.05;
+      if (furtherInAudio && b.abs?.url) {
+        actions.append(
+          btn('Continue listening', 'primary block', () => window.open(b.abs.url, '_blank')),
+          pair(btn('Continue reading', '', () => openReader(b)), btn('Mark finished', '', () => setStatus(b, 'read'))),
+          enrichBtn);
+      } else {
+        const label = b.status === 'read' ? 'Read again' : b.status === 'reading' ? 'Continue reading' : 'Start reading';
+        const second = b.status === 'read'
+          ? btn('Mark unread', '', () => setStatus(b, 'imported'))
+          : btn('Mark finished', '', () => setStatus(b, 'read'));
+        actions.append(btn(label, 'primary block', () => openReader(b)),
+          pair(second, btn('Choose a different file', '', () => openPicker(b))),
+          enrichBtn);
+      }
       break;
     }
     default:

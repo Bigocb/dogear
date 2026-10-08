@@ -138,10 +138,12 @@ async function loadStatus() {
   const s = await api('/admin/status');
   const aa = s.aa || {};
   const hc = s.hardcover || {};
+  const abs = s.abs || {};
   const counts = s.counts || {};
   $('#sys-status').innerHTML =
     row('Hardcover', hc.configured ? 'Connected' : 'Using Open Library', hc.configured ? 'status-ok' : '') +
     row("Anna's Archive key", aa.key_configured ? 'Set' : 'Not set', aa.key_configured ? 'status-ok' : 'status-bad') +
+    row('Audiobookshelf', abs.configured ? `${abs.matched || 0} matched` : 'Off', abs.configured ? 'status-ok' : '') +
     row('Books', counts.books ?? '—') +
     row('Book files', counts.files ?? '—') +
     row('Downloads requested', counts.grabs ?? '—') +
@@ -186,6 +188,14 @@ async function loadSettings() {
   $('#hardcover-state').textContent = s.hardcover_token_set ? 'Set' : 'Using Open Library';
   $('#hardcover-state').className = 'intg-state ' + (s.hardcover_token_set ? 'status-ok' : '');
 
+  $('#abs-enabled').checked = !!s.abs_enabled;
+  $('#abs-url').value = s.abs_url || '';
+  $('#abs-key').value = '';
+  $('#abs-key').placeholder = s.abs_api_key_set ? '•••••• (set — leave blank to keep)' : 'from ABS → Settings → Users';
+  $('#abs-state').textContent = s.abs_url && s.abs_api_key_set ? (s.abs_enabled ? 'On' : 'Off') : 'Not configured';
+  $('#abs-state').className = 'intg-state ' + (s.abs_url && s.abs_api_key_set && s.abs_enabled ? 'status-ok' : '');
+  loadABSLibraries(s.abs_library_id || '').catch(() => {});
+
   $('#tts-url').value = s.tts_url || '';
   $('#tts-state').textContent = s.tts_url ? 'Ready' : 'Not configured';
   $('#tts-state').className = 'intg-state ' + (s.tts_url ? 'status-ok' : '');
@@ -200,11 +210,15 @@ $('#save-settings').onclick = async (e) => {
       prowlarr_url: $('#prowlarr-url').value.trim(),
       aa_base_url: $('#aa-base').value.trim(),
       tts_url: $('#tts-url').value.trim(),
+      abs_enabled: $('#abs-enabled').checked,
+      abs_url: $('#abs-url').value.trim(),
+      abs_library_id: $('#abs-library').value || '',
     };
     // only send secrets when typed, so blank leaves them untouched
     if ($('#prowlarr-key').value) body.prowlarr_api_key = $('#prowlarr-key').value.trim();
     if ($('#aa-key').value) body.aa_donator_key = $('#aa-key').value.trim();
     if ($('#hardcover-token').value) body.hardcover_token = $('#hardcover-token').value.trim();
+    if ($('#abs-key').value) body.abs_api_key = $('#abs-key').value.trim();
     await api('/admin/settings', { method: 'PUT', body: JSON.stringify(body) });
     toast('Sources saved');
     await loadSettings();
@@ -307,4 +321,68 @@ if (btnEnrich) {
     }
   };
   api('/admin/enrich').then(j => render(j)).catch(() => {});
+}
+
+// ---- audiobookshelf ----
+let absLibraries = [];
+
+async function loadABSLibraries(selectID = '') {
+  const sel = $('#abs-library');
+  try {
+    const d = await api('/admin/abs/libraries');
+    absLibraries = d.libraries || [];
+    const prev = selectID || sel.value;
+    sel.innerHTML = absLibraries.map(l => `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('') +
+      '<option value="">Auto-select</option>';
+    if (prev && absLibraries.some(l => l.id === prev)) sel.value = prev;
+    else if (absLibraries.length === 1) sel.value = absLibraries[0].id;
+  } catch (e) {
+    sel.innerHTML = '<option value="">Unable to load libraries</option>';
+  }
+}
+
+const absURL = $('#abs-url');
+const absKey = $('#abs-key');
+if (absURL) {
+  async function refreshLibs() {
+    if (!absURL.value.trim() || !absKey.value.trim()) return;
+    // save temporarily so the server can use the new credentials
+    try {
+      await api('/admin/settings', { method: 'PUT', body: JSON.stringify({
+        abs_url: absURL.value.trim(),
+        abs_api_key: absKey.value.trim(),
+        abs_enabled: $('#abs-enabled').checked,
+        abs_library_id: $('#abs-library').value || ''
+      })});
+      await loadABSLibraries($('#abs-library').value || '');
+    } catch {}
+  }
+  absKey.addEventListener('change', refreshLibs);
+  absURL.addEventListener('change', refreshLibs);
+}
+
+const btnAbsSync = $('#btn-abs-sync');
+if (btnAbsSync) {
+  btnAbsSync.onclick = async () => {
+    btnAbsSync.disabled = true;
+    const orig = btnAbsSync.textContent;
+    btnAbsSync.textContent = 'Syncing…';
+    $('#abs-sync-result').textContent = '';
+    try {
+      const r = await api('/admin/abs/sync', { method: 'POST', body: JSON.stringify({}) });
+      $('#abs-sync-result').textContent = `✓ Synced ${r.synced} items · matched ${r.matched}`;
+      $('#abs-sync-result').className = 'test-out hint status-ok';
+      loadStatus().catch(() => {});
+    } catch (e) {
+      $('#abs-sync-result').textContent = '✕ ' + e.message;
+      $('#abs-sync-result').className = 'test-out hint status-bad';
+    } finally {
+      btnAbsSync.disabled = false;
+      btnAbsSync.textContent = orig;
+    }
+  };
+}
+
+if (me && me.role === 'admin') {
+  loadABSLibraries().catch(() => {});
 }

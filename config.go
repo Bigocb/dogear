@@ -54,6 +54,10 @@ const (
 	cfgAABaseURL   = "aa_base_url"
 	cfgSourceOrder = "release_source_order"
 	cfgTTSUrl      = "tts_url"
+	cfgABSURL      = "abs_url"
+	cfgABSKey      = "abs_api_key"
+	cfgABSLibrary  = "abs_library_id"
+	cfgABSOn       = "abs_enabled"
 )
 
 // Settings holds the resolved integration configuration.
@@ -65,6 +69,10 @@ type Settings struct {
 	AABaseURL       string `json:"aa_base_url"`
 	HardcoverSet    bool   `json:"hardcover_token_set"`
 	TTSUrl          string `json:"tts_url"`
+	ABSURL          string `json:"abs_url"`
+	ABSKeySet       bool   `json:"abs_api_key_set"`
+	ABSLibrary      string `json:"abs_library_id"`
+	ABSEnabled      bool   `json:"abs_enabled"`
 }
 
 func (s *Store) settings() Settings {
@@ -76,6 +84,10 @@ func (s *Store) settings() Settings {
 		AABaseURL:       s.config(cfgAABaseURL, "AA_BASE_URL", "https://annas-archive.gd"),
 		HardcoverSet:    s.config(cfgHardcoverToken, "", "") != "",
 		TTSUrl:          s.config(cfgTTSUrl, "DOGEAR_TTS_URL", "http://dogear-tts:8097"),
+		ABSURL:          s.config(cfgABSURL, "ABS_URL", ""),
+		ABSKeySet:       s.config(cfgABSKey, "ABS_API_KEY", "") != "",
+		ABSLibrary:      s.config(cfgABSLibrary, "ABS_LIBRARY_ID", ""),
+		ABSEnabled:      s.config(cfgABSOn, "", "") == "true",
 	}
 }
 
@@ -91,3 +103,7 @@ func (s *Store) aaBaseURL() string {
 func (s *Store) ttsURL() string {
 	return strings.TrimRight(s.config(cfgTTSUrl, "DOGEAR_TTS_URL", "http://dogear-tts:8097"), "/")
 }
+func (s *Store) absURL() string  { return strings.TrimRight(s.config(cfgABSURL, "ABS_URL", ""), "/") }
+func (s *Store) absKey() string  { return s.config(cfgABSKey, "ABS_API_KEY", "") }
+func (s *Store) absLibrary() string { return s.config(cfgABSLibrary, "ABS_LIBRARY_ID", "") }
+func (s *Store) absEnabled() bool { return s.config(cfgABSOn, "", "") == "true" }

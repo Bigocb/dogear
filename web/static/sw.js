@@ -3,7 +3,7 @@
 // - Book files: cached on successful read, LRU-ish eviction (keep N most recent)
 // - Covers/api: network-first (cheap, tiny)
 
-const VERSION = 'v7'
+const VERSION = 'v8'
 const SHELL_CACHE = `dogear-shell-${VERSION}`
 const BOOK_CACHE = `dogear-books-${VERSION}`
 const KEEP_BOOKS = 5

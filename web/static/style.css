@@ -314,6 +314,24 @@ main {
 .bk-desc.none { font-family: var(--sans); font-size: .88rem; color: var(--paper-faint); }
 .bk-remove { margin-top: 18px; display: flex; justify-content: center; }
 
+.abs-chip {
+  position: absolute; left: 6px; top: 6px; z-index: 3;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border-radius: 20px;
+  background: rgba(19, 22, 28, .82); backdrop-filter: blur(4px);
+  color: var(--paper); font-size: .68rem; font-weight: 700; text-decoration: none;
+}
+.abs-chip svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
+.bk-cover { position: relative; }
+
+.book { position: relative; }
+.abs-badge {
+  position: absolute; right: 6px; top: 6px; z-index: 3;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--gilt);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
 /* release picker */
 .picker-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 #picker-list { display: flex; flex-direction: column; gap: 6px; }

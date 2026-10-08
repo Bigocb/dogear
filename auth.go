@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -727,6 +728,39 @@ func (s *Store) canAccessBook(userID, bookID int64) bool {
 		return true
 	}
 	return owner != nil && *owner == userID
+}
+
+// seriesNextBook finds the next unread book in the same series as bookID for
+// the given user. It considers only books the user can access and skips books
+// they have marked read or hidden.
+func (s *Store) seriesNextBook(userID, bookID int64) (*Book, error) {
+	var seriesName *string
+	err := s.db.QueryRow(`SELECT series_name FROM books WHERE id=?`, bookID).Scan(&seriesName)
+	if err != nil {
+		return nil, err
+	}
+	if seriesName == nil || *seriesName == "" {
+		return nil, nil
+	}
+	b, err := scanBook(s.db.QueryRow(`
+		SELECT `+bookCols+` FROM books b
+		WHERE b.id != ? AND lower(coalesce(b.series_name,'')) = lower(?)
+		  AND (b.private=0 OR b.owner_id=? OR EXISTS (
+			  SELECT 1 FROM user_books ub WHERE ub.book_id=b.id AND ub.user_id=? AND ub.hidden=0
+		  ))
+		  AND NOT EXISTS (
+			  SELECT 1 FROM user_books ub2
+			  WHERE ub2.book_id=b.id AND ub2.user_id=? AND ub2.status='read' AND ub2.hidden=0
+		  )
+		ORDER BY coalesce(b.series_position, 999999) ASC, b.title ASC
+		LIMIT 1`, bookID, *seriesName, userID, userID, userID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
 }
 
 // setPrivate toggles a book's private flag. Only the owner (or an admin) may
