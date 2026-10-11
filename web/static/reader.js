@@ -134,7 +134,7 @@ async function main() {
   }
 
   view.addEventListener('relocate', e => onRelocate(e.detail))
-  view.addEventListener('load', ({ detail }) => { applyTypography(); wireTaps(detail.doc) })
+  view.addEventListener('load', ({ detail }) => { applyTypography(); wireTaps(detail.doc); if (ab.on) abSent.doc = null })
   view.addEventListener('show-annotation', e => { annotationTapAt = Date.now(); openHighlight(e.detail.value) })
   view.addEventListener('draw-annotation', e => {
     const { draw, annotation } = e.detail
@@ -673,13 +673,17 @@ $('#tts-rate').onclick = cycleTTSRate
 $('#tts-close').onclick = stopTTS
 
 // ---- listen along (Audiobook via Audiobookshelf) ----
-// Plays the linked ABS audiobook and, with Follow on, moves the ebook to the
-// position matching the audio. Sync is fraction-based (audio time / duration ->
-// book fraction) with the ABS chapter title shown; there is no per-sentence
-// alignment (ABS only exposes chapter markers). Works when the ebook and
-// audiobook are roughly the same edition.
-const ab = { on: false, info: null, audio: null, follow: true, rate: 1, chapter: -1 }
+// Chapter-anchored "immersion" playback. ABS chapter markers are mapped to the
+// ebook's TOC (short intro/outro chapters and obvious front/back matter are
+// skipped); within a chapter the audio position is interpolated to a sentence
+// and that sentence is highlighted while the ebook follows the narration. When
+// the chapters can't be aligned (different editions) it falls back to whole-book
+// fraction following (no sentence highlight). ABS exposes only chapter
+// timestamps, so within-chapter highlighting is an approximation.
+const ab = { on: false, info: null, audio: null, follow: true, rate: 1, chapter: -1, map: null, curHref: null, files: [], track: 0, base: 0, total: 0, pending: null }
 const AB_RATES = [1, 1.25, 1.5, 1.75, 2, 0.75]
+const AB_MIN_CHAPTER = 45 // seconds; drop shorter ABS chapters (intros/outros)
+const AB_SKIP_TOC = /^(cover|title|half ?title|front ?matter|contents|table of contents|copyright|dedication|epigraph|acknowledg|about the (author|book)|also by|advert|newsletter|preview)\b/i
 
 function abAudio() {
   if (!ab.audio) {
@@ -688,40 +692,141 @@ function abAudio() {
     ab.audio.addEventListener('timeupdate', onAudioTick)
     ab.audio.addEventListener('play', () => $('#audio-bar')?.classList.remove('paused'))
     ab.audio.addEventListener('pause', () => $('#audio-bar')?.classList.add('paused'))
-    ab.audio.addEventListener('ended', () => $('#audio-bar')?.classList.add('paused'))
+    ab.audio.addEventListener('ended', () => abAdvanceTrack())
+    ab.audio.addEventListener('loadedmetadata', () => { if (ab.pending != null) { ab.audio.currentTime = ab.pending; ab.pending = null } })
     ab.audio.addEventListener('error', () => { if (ab.on) toast('Audiobook playback failed') })
   }
   return ab.audio
 }
 
+// flatten the ebook TOC to leaf entries, dropping obvious front/back matter
+function abFlatToc(toc, out = []) {
+  for (const it of toc || []) {
+    const label = (it.label || '').trim()
+    if (it.href && !AB_SKIP_TOC.test(label)) out.push({ label, href: it.href })
+    if (it.subitems?.length) abFlatToc(it.subitems, out)
+  }
+  return out
+}
+
+// buildChapterMap pairs each real ABS chapter with an ebook TOC entry: exact
+// index alignment when the counts match, proportional otherwise. Null when
+// there's nothing to align with (=> fraction fallback).
+function buildChapterMap() {
+  const toc = abFlatToc(view?.book?.toc)
+  const absCh = (ab.info?.chapters || []).filter(c => (c.end - c.start) >= AB_MIN_CHAPTER)
+  if (!toc.length || !absCh.length) { ab.map = null; return }
+  ab.map = absCh.map((c, i) => {
+    const t = toc[Math.min(toc.length - 1, Math.round(i * toc.length / absCh.length))]
+    return { start: c.start, end: c.end, href: t.href, label: t.label || c.title }
+  })
+}
+
 function abChapterIndex(t) {
+  const m = ab.map
+  if (m && m.length) { for (let i = m.length - 1; i >= 0; i--) if (t >= m[i].start) return i; return -1 }
   const ch = ab.info?.chapters || []
   for (let i = ch.length - 1; i >= 0; i--) if (t >= ch[i].start) return i
   return 0
+}
+
+// sentence list for the currently rendered section (reuses the TTS segmenter)
+let abSent = { doc: null, list: [] }
+function abEnsureSentences() {
+  const doc = view?.renderer?.getContents?.()[0]?.doc
+  if (!doc) return false
+  if (abSent.doc === doc && abSent.list.length) return true
+  abSent.doc = doc
+  abSent.list = ttsSegments(doc)
+  return abSent.list.length > 0
+}
+
+function abHighlight(range) {
+  const o = ttsOverlayer()
+  if (!o) return
+  try { o.add('__ab__', range, Overlayer.highlight, { color: HL_COLORS.blue }) } catch {}
+  if (ab.follow) { try { view.renderer.scrollToAnchor?.(range, false) } catch {} }
+}
+function clearABHighlight() { try { ttsOverlayer()?.remove('__ab__') } catch {} }
+
+// ---- multi-file playback (one <audio> element, tracks played in sequence) ----
+function abCum() {
+  const c = []
+  let s = 0
+  for (const f of ab.files) { c.push(s); s += f.duration || 0 }
+  return c
+}
+function abGlobalTime() { return ab.base + (ab.audio?.currentTime || 0) }
+
+function abLoadTrack(i, { play = false, local = null } = {}) {
+  if (!ab.audio || i < 0 || i >= ab.files.length) return
+  ab.track = i
+  ab.base = abCum()[i]
+  ab.pending = local
+  ab.audio.src = `/api/books/${bookId}/audio?track=${i}`
+  ab.audio.playbackRate = ab.rate
+  if (local == null) ab.audio.currentTime = 0
+  if (play) ab.audio.play().catch(() => {})
+}
+function abAdvanceTrack() {
+  if (ab.track + 1 < ab.files.length) abLoadTrack(ab.track + 1, { play: true, local: 0 })
+  else $('#audio-bar')?.classList.add('paused')
+}
+function abSeekGlobal(g) {
+  if (!ab.audio || !ab.files.length) return
+  g = Math.max(0, Math.min(ab.total, g))
+  const c = abCum()
+  let k = ab.files.length - 1
+  for (let i = 0; i < ab.files.length; i++) { if (g >= c[i]) k = i; else break }
+  const local = g - c[k]
+  const wasPlaying = !ab.audio.paused
+  if (k !== ab.track) abLoadTrack(k, { play: wasPlaying, local })
+  else ab.audio.currentTime = local
 }
 
 let abLastJump = 0
 function onAudioTick() {
   const a = ab.audio
   if (!a || !ab.info) return
-  const dur = ab.info.duration || a.duration || 0
-  if (dur > 0) {
-    const pct = Math.min(100, (a.currentTime / dur) * 100)
-    const seek = $('#audio-seek')
-    if (seek && document.activeElement !== seek) seek.value = pct.toFixed(2)
-    const ci = abChapterIndex(a.currentTime)
+  const t = abGlobalTime()
+  const dur = ab.total || ab.info.duration || 0
+  if (dur <= 0) { saveAudioPos(); return }
+  const pct = Math.min(100, (t / dur) * 100)
+  const seek = $('#audio-seek')
+  if (seek && document.activeElement !== seek) seek.value = pct.toFixed(2)
+
+  const ci = abChapterIndex(t)
+  const ch = ab.map && ci >= 0 ? ab.map[ci] : null
+
+  if (ch) {
+    // B: chapter-anchored, sentence highlight
+    if (ci !== ab.chapter) {
+      ab.chapter = ci
+      const el = $('#audio-chapter')
+      if (el) el.textContent = ch.label || 'Audiobook'
+    }
+    if (ch.href && ch.href !== ab.curHref) {
+      ab.curHref = ch.href
+      abSent.doc = null // re-segment once the new section renders
+      view?.goTo(ch.href).catch(() => {})
+    }
+    if (abEnsureSentences()) {
+      const intra = ch.end > ch.start ? (t - ch.start) / (ch.end - ch.start) : 0
+      const idx = Math.max(0, Math.min(abSent.list.length - 1, Math.round(intra * (abSent.list.length - 1))))
+      abHighlight(abSent.list[idx][1])
+    }
+  } else {
+    // A fallback: whole-book fraction follow (no sentence highlight)
     if (ci !== ab.chapter) {
       ab.chapter = ci
       const el = $('#audio-chapter')
       if (el) el.textContent = ab.info.chapters?.[ci]?.title || 'Audiobook'
     }
-    // Follow: nudge the ebook toward the audio's position, throttled so we
-    // don't fight a reader who is scrolling, and only past a drift threshold.
     if (ab.follow && view) {
       const now = Date.now()
       if (now - abLastJump > 1500 && Math.abs(pct - (currentPct || 0)) > 1.2) {
         abLastJump = now
-        view.goToFraction(a.currentTime / dur).catch(() => {})
+        view.goToFraction(t / dur).catch(() => {})
       }
     }
   }
@@ -730,7 +835,7 @@ function onAudioTick() {
 
 function saveAudioPos() {
   if (!ab.audio) return
-  try { localStorage.setItem('dogear-audio-' + bookId, String(ab.audio.currentTime)) } catch {}
+  try { localStorage.setItem('dogear-audio-' + bookId, String(abGlobalTime())) } catch {}
 }
 
 async function startAudio() {
@@ -741,22 +846,31 @@ async function startAudio() {
     if (!info?.audio_files?.length) { toast('Audiobook has no audio files'); return }
     ab.info = info
     ab.on = true
-    const a = abAudio()
-    a.src = `/api/books/${bookId}/audio`
-    a.playbackRate = ab.rate
+    ab.chapter = -1
+    ab.curHref = null
+    ab.files = info.audio_files
+    ab.total = info.duration || info.audio_files.reduce((s, f) => s + (f.duration || 0), 0)
+    abSent = { doc: null, list: [] }
+    buildChapterMap()
+    abAudio()
     let start = 0
     try { start = Number(localStorage.getItem('dogear-audio-' + bookId)) || 0 } catch {}
-    if (start > 1 && (!info.duration || start < info.duration)) a.currentTime = start
+    if (!(start > 1 && (!ab.total || start < ab.total))) start = 0
     $('#audio-bar').hidden = false
     $('#audio-bar').classList.remove('paused')
     $('#btn-listen').setAttribute('aria-pressed', 'true')
-    a.play().catch(() => toast('Tap play to allow audio'))
+    ab.track = -1
+    abSeekGlobal(start) // loads the track containing `start`
+    ab.audio.play().catch(() => toast('Tap play to allow audio'))
   } catch { toast('Could not load the audiobook') }
 }
 
 function stopAudio() {
   ab.on = false
+  ab.curHref = null
+  abSent = { doc: null, list: [] }
   try { ab.audio?.pause() } catch {}
+  clearABHighlight()
   saveAudioPos()
   $('#audio-bar').hidden = true
   $('#btn-listen')?.setAttribute('aria-pressed', 'false')
@@ -770,10 +884,17 @@ function toggleAudio() {
 }
 
 function abGotoChapter(dir) {
+  if (!ab.audio) return
+  const m = ab.map
+  if (m && m.length) {
+    const ci = Math.max(0, Math.min(m.length - 1, (ab.chapter < 0 ? 0 : ab.chapter) + dir))
+    abSeekGlobal(m[ci].start)
+    return
+  }
   const ch = ab.info?.chapters || []
-  if (!ch.length || !ab.audio) return
+  if (!ch.length) return
   const ci = Math.max(0, Math.min(ch.length - 1, ab.chapter + dir))
-  ab.audio.currentTime = ch[ci].start
+  abSeekGlobal(ch[ci].start)
 }
 
 $('#btn-listen')?.addEventListener('click', () => { if (ab.on) stopAudio(); else startAudio() })
@@ -782,8 +903,8 @@ $('#audio-prev')?.addEventListener('click', () => abGotoChapter(-1))
 $('#audio-next')?.addEventListener('click', () => abGotoChapter(1))
 $('#audio-close')?.addEventListener('click', stopAudio)
 $('#audio-seek')?.addEventListener('input', (e) => {
-  const dur = ab.info?.duration || ab.audio?.duration || 0
-  if (ab.audio && dur) ab.audio.currentTime = (Number(e.target.value) / 100) * dur
+  if (!ab.on || !ab.total) return
+  abSeekGlobal((Number(e.target.value) / 100) * ab.total)
 })
 $('#audio-rate')?.addEventListener('click', () => {
   const i = AB_RATES.indexOf(ab.rate)

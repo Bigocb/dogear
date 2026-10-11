@@ -2048,7 +2048,15 @@ func (a *apiServer) handleBookAudio(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "audiobook has no audio files")
 		return
 	}
-	resp, err := a.abs.OpenStream(r.Context(), ab.itemID, info.AudioFiles[0].Ino, r.Header.Get("Range"))
+	// Multi-file audiobooks stream one track at a time; the reader picks the
+	// track that contains the current global position.
+	track := 0
+	if t := r.URL.Query().Get("track"); t != "" {
+		if n, err := strconv.Atoi(t); err == nil && n >= 0 && n < len(info.AudioFiles) {
+			track = n
+		}
+	}
+	resp, err := a.abs.OpenStream(r.Context(), ab.itemID, info.AudioFiles[track].Ino, r.Header.Get("Range"))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

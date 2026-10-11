@@ -192,14 +192,21 @@ func (a *ABS) ItemAudio(ctx context.Context, itemID string) (*ABSItemAudio, erro
 	for _, f := range d.Media.AudioFiles {
 		out.AudioFiles = append(out.AudioFiles, ABSAudioFile{Ino: f.Ino, Index: f.Index, Duration: f.Duration, Filename: f.Metadata.Filename})
 	}
-	// ABS sometimes leaves media.duration at 0; fall back to the audio file's
-	// own duration, then to the last chapter's end.
-	if out.Duration <= 0 {
-		if len(out.AudioFiles) > 0 && out.AudioFiles[0].Duration > 0 {
-			out.Duration = out.AudioFiles[0].Duration
-		} else if n := len(out.Chapters); n > 0 {
-			out.Duration = out.Chapters[n-1].End
+	// Total length: prefer the sum of the audio files (the real playable
+	// timeline, and correct for multi-file items where the first file may be a
+	// short intro), then media.duration, then the last chapter's end.
+	var sum float64
+	for _, f := range out.AudioFiles {
+		if f.Duration > 0 {
+			sum += f.Duration
 		}
+	}
+	switch {
+	case sum > 0:
+		out.Duration = sum
+	case out.Duration > 0: // media.duration is already set
+	case len(out.Chapters) > 0:
+		out.Duration = out.Chapters[len(out.Chapters)-1].End
 	}
 	return out, nil
 }
