@@ -250,14 +250,19 @@ async function renderLibrary() {
     catch (e) { return toastError('Could not load the household library', e); }
   } else {
     const matches = shelf.filter(b => !q || `${b.title} ${b.author}`.toLowerCase().includes(q));
+    const hasAudio = b => !!(b.abs && b.abs.item_id);
     // chip counts reflect the current search
     $$('#filter-chips button').forEach(c => {
       const f = c.dataset.filter;
-      const n = f ? matches.filter(b => b.status === f).length : matches.length;
+      const n = !f ? matches.length
+        : f === 'audio' ? matches.filter(hasAudio).length
+        : matches.filter(b => b.status === f).length;
       c.innerHTML = `${c.dataset.label || (c.dataset.label = c.textContent)}<span class="n">${n}</span>`;
       c.classList.toggle('on', f === filter);
     });
-    books = filter ? matches.filter(b => b.status === filter) : matches;
+    books = !filter ? matches
+      : filter === 'audio' ? matches.filter(hasAudio)
+      : matches.filter(b => b.status === filter);
   }
   grid.innerHTML = '';
   if (!books.length) {
@@ -265,7 +270,9 @@ async function renderLibrary() {
       ? `<div class="empty-state"><h3>No matches</h3><p>Nothing ${scope === 'household' ? 'in the household library' : 'on your shelf'} matches “${escapeHtml(libQuery)}”.</p></div>`
       : scope === 'household'
         ? '<div class="empty-state"><h3>All caught up</h3><p>Every book in the household library is already on your shelf.</p></div>'
-        : filter
+        : filter === 'audio'
+          ? '<div class="empty-state"><h3>No audiobooks</h3><p>None of your books have a linked audiobook yet. Set up Audiobookshelf in Admin and run a sync.</p></div>'
+          : filter
           ? `<div class="empty-state"><h3>Nothing here</h3><p>No books marked ${escapeHtml(STATUS_LABEL[filter].toLowerCase())}.</p></div>`
           : '<div class="empty-state"><h3>Your shelf is empty</h3><p>Find a book, or add one from the household library.</p><button class="btn primary" data-go="find">Find a book</button></div>';
   } else {
