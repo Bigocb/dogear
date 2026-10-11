@@ -35,6 +35,7 @@
       <button id="btn-toc" class="tool"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Contents</span></button>
       <button id="btn-highlights" class="tool"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Notes</span></button>
       <button id="btn-tts" class="tool" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12"/></svg><span>Listen</span></button>
+      <button id="btn-listen" class="tool" aria-pressed="false" hidden><svg viewBox="0 0 24 24"><path d="M4 14a8 8 0 0116 0"/><rect x="3" y="13" width="4" height="7" rx="1.4"/><rect x="17" y="13" width="4" height="7" rx="1.4"/></svg><span>Audiobook</span></button>
       <button id="btn-settings" class="tool"><span class="aa">Aa</span><span>Text</span></button>
     </div>
   </footer>
@@ -45,6 +46,19 @@
     <button id="tts-next" class="tts-btn" aria-label="Next sentence"><svg viewBox="0 0 24 24"><path d="M6 6l8 6-8 6zM17 5v14"/></svg></button>
     <button id="tts-rate" class="tts-rate" aria-label="Playback speed">1×</button>
     <button id="tts-close" class="tts-btn" aria-label="Stop listening"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+
+  <div id="audio-bar" hidden>
+    <button id="audio-prev" class="tts-btn" aria-label="Previous chapter"><svg viewBox="0 0 24 24"><path d="M18 6l-8 6 8 6zM7 5v14"/></svg></button>
+    <button id="audio-play" class="tts-btn play" aria-label="Play"><svg class="icon-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg><svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5l12 7-12 7z"/></svg></button>
+    <button id="audio-next" class="tts-btn" aria-label="Next chapter"><svg viewBox="0 0 24 24"><path d="M6 6l8 6-8 6zM17 5v14"/></svg></button>
+    <div class="audio-mid">
+      <div id="audio-chapter" class="audio-chapter">Audiobook</div>
+      <input id="audio-seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Audiobook position">
+    </div>
+    <button id="audio-follow" class="tts-rate" aria-pressed="true" aria-label="Follow the audio">Follow</button>
+    <button id="audio-rate" class="tts-rate" aria-label="Playback speed">1×</button>
+    <button id="audio-close" class="tts-btn" aria-label="Stop listening"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
 
   <div id="reader-loading" class="overlay visible"><div class="loading-mark"></div>Opening book…</div>

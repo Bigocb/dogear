@@ -103,7 +103,7 @@ func (s *Store) aaBaseURL() string {
 func (s *Store) ttsURL() string {
 	return strings.TrimRight(s.config(cfgTTSUrl, "DOGEAR_TTS_URL", "http://dogear-tts:8097"), "/")
 }
-func (s *Store) absURL() string  { return strings.TrimRight(s.config(cfgABSURL, "ABS_URL", ""), "/") }
-func (s *Store) absKey() string  { return s.config(cfgABSKey, "ABS_API_KEY", "") }
+func (s *Store) absURL() string     { return strings.TrimRight(s.config(cfgABSURL, "ABS_URL", ""), "/") }
+func (s *Store) absKey() string     { return s.config(cfgABSKey, "ABS_API_KEY", "") }
 func (s *Store) absLibrary() string { return s.config(cfgABSLibrary, "ABS_LIBRARY_ID", "") }
-func (s *Store) absEnabled() bool { return s.config(cfgABSOn, "", "") == "true" }
+func (s *Store) absEnabled() bool   { return s.config(cfgABSOn, "", "") == "true" }

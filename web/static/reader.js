@@ -220,6 +220,8 @@ let docTitle = 'Book';
       document.title = `${b.title} — Dogear`
       $('#reader-book-title').textContent = b.title
     }
+    // "Listen along" only makes sense when an ABS audiobook is linked.
+    if (b?.abs?.item_id) $('#btn-listen').hidden = false
   } catch {}
 })()
 
@@ -669,6 +671,130 @@ $('#tts-next').onclick = ttsNext
 $('#tts-prev').onclick = ttsPrev
 $('#tts-rate').onclick = cycleTTSRate
 $('#tts-close').onclick = stopTTS
+
+// ---- listen along (Audiobook via Audiobookshelf) ----
+// Plays the linked ABS audiobook and, with Follow on, moves the ebook to the
+// position matching the audio. Sync is fraction-based (audio time / duration ->
+// book fraction) with the ABS chapter title shown; there is no per-sentence
+// alignment (ABS only exposes chapter markers). Works when the ebook and
+// audiobook are roughly the same edition.
+const ab = { on: false, info: null, audio: null, follow: true, rate: 1, chapter: -1 }
+const AB_RATES = [1, 1.25, 1.5, 1.75, 2, 0.75]
+
+function abAudio() {
+  if (!ab.audio) {
+    ab.audio = new Audio()
+    ab.audio.preload = 'auto'
+    ab.audio.addEventListener('timeupdate', onAudioTick)
+    ab.audio.addEventListener('play', () => $('#audio-bar')?.classList.remove('paused'))
+    ab.audio.addEventListener('pause', () => $('#audio-bar')?.classList.add('paused'))
+    ab.audio.addEventListener('ended', () => $('#audio-bar')?.classList.add('paused'))
+    ab.audio.addEventListener('error', () => { if (ab.on) toast('Audiobook playback failed') })
+  }
+  return ab.audio
+}
+
+function abChapterIndex(t) {
+  const ch = ab.info?.chapters || []
+  for (let i = ch.length - 1; i >= 0; i--) if (t >= ch[i].start) return i
+  return 0
+}
+
+let abLastJump = 0
+function onAudioTick() {
+  const a = ab.audio
+  if (!a || !ab.info) return
+  const dur = ab.info.duration || a.duration || 0
+  if (dur > 0) {
+    const pct = Math.min(100, (a.currentTime / dur) * 100)
+    const seek = $('#audio-seek')
+    if (seek && document.activeElement !== seek) seek.value = pct.toFixed(2)
+    const ci = abChapterIndex(a.currentTime)
+    if (ci !== ab.chapter) {
+      ab.chapter = ci
+      const el = $('#audio-chapter')
+      if (el) el.textContent = ab.info.chapters?.[ci]?.title || 'Audiobook'
+    }
+    // Follow: nudge the ebook toward the audio's position, throttled so we
+    // don't fight a reader who is scrolling, and only past a drift threshold.
+    if (ab.follow && view) {
+      const now = Date.now()
+      if (now - abLastJump > 1500 && Math.abs(pct - (currentPct || 0)) > 1.2) {
+        abLastJump = now
+        view.goToFraction(a.currentTime / dur).catch(() => {})
+      }
+    }
+  }
+  saveAudioPos()
+}
+
+function saveAudioPos() {
+  if (!ab.audio) return
+  try { localStorage.setItem('dogear-audio-' + bookId, String(ab.audio.currentTime)) } catch {}
+}
+
+async function startAudio() {
+  try {
+    const res = await fetch(`/api/books/${bookId}/audio-info`)
+    if (!res.ok) { toast('No audiobook for this book'); return }
+    const info = await res.json()
+    if (!info?.audio_files?.length) { toast('Audiobook has no audio files'); return }
+    ab.info = info
+    ab.on = true
+    const a = abAudio()
+    a.src = `/api/books/${bookId}/audio`
+    a.playbackRate = ab.rate
+    let start = 0
+    try { start = Number(localStorage.getItem('dogear-audio-' + bookId)) || 0 } catch {}
+    if (start > 1 && (!info.duration || start < info.duration)) a.currentTime = start
+    $('#audio-bar').hidden = false
+    $('#audio-bar').classList.remove('paused')
+    $('#btn-listen').setAttribute('aria-pressed', 'true')
+    a.play().catch(() => toast('Tap play to allow audio'))
+  } catch { toast('Could not load the audiobook') }
+}
+
+function stopAudio() {
+  ab.on = false
+  try { ab.audio?.pause() } catch {}
+  saveAudioPos()
+  $('#audio-bar').hidden = true
+  $('#btn-listen')?.setAttribute('aria-pressed', 'false')
+}
+
+function toggleAudio() {
+  if (!ab.on) { startAudio(); return }
+  const a = ab.audio
+  if (!a) return
+  if (a.paused) a.play().catch(() => {}); else a.pause()
+}
+
+function abGotoChapter(dir) {
+  const ch = ab.info?.chapters || []
+  if (!ch.length || !ab.audio) return
+  const ci = Math.max(0, Math.min(ch.length - 1, ab.chapter + dir))
+  ab.audio.currentTime = ch[ci].start
+}
+
+$('#btn-listen')?.addEventListener('click', () => { if (ab.on) stopAudio(); else startAudio() })
+$('#audio-play')?.addEventListener('click', toggleAudio)
+$('#audio-prev')?.addEventListener('click', () => abGotoChapter(-1))
+$('#audio-next')?.addEventListener('click', () => abGotoChapter(1))
+$('#audio-close')?.addEventListener('click', stopAudio)
+$('#audio-seek')?.addEventListener('input', (e) => {
+  const dur = ab.info?.duration || ab.audio?.duration || 0
+  if (ab.audio && dur) ab.audio.currentTime = (Number(e.target.value) / 100) * dur
+})
+$('#audio-rate')?.addEventListener('click', () => {
+  const i = AB_RATES.indexOf(ab.rate)
+  ab.rate = AB_RATES[(i + 1) % AB_RATES.length]
+  if (ab.audio) ab.audio.playbackRate = ab.rate
+  $('#audio-rate').textContent = `${ab.rate}×`
+})
+$('#audio-follow')?.addEventListener('click', () => {
+  ab.follow = !ab.follow
+  $('#audio-follow').setAttribute('aria-pressed', ab.follow ? 'true' : 'false')
+})
 
 // ---- typography ----
 const SIZE_STEPS = [70, 80, 90, 100, 110, 120, 135, 150, 170, 200]

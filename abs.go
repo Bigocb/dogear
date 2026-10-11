@@ -21,6 +21,9 @@ import (
 type ABS struct {
 	store  *Store
 	client *http.Client
+	// stream has no overall timeout: it serves audio bodies that can outlive
+	// the 120s API timeout. Cancellation comes from the request context.
+	stream *http.Client
 	log    *log.Logger
 }
 
@@ -28,6 +31,7 @@ func NewABS(store *Store, logf *log.Logger) *ABS {
 	return &ABS{
 		store:  store,
 		client: &http.Client{Timeout: 120 * time.Second},
+		stream: &http.Client{},
 		log:    logf,
 	}
 }
@@ -85,16 +89,16 @@ func (a *ABS) Libraries(ctx context.Context) ([]ABSLibrary, error) {
 
 // ABSMediaMetadata is the nested metadata ABS returns for an audiobook.
 type ABSMediaMetadata struct {
-	Title         string `json:"title"`
-	Author        string `json:"author"`
-	Authors       []struct {
+	Title   string `json:"title"`
+	Author  string `json:"author"`
+	Authors []struct {
 		Name string `json:"name"`
 	} `json:"authors"`
-	Narrator      string `json:"narrator"`
-	Narrators     []string `json:"narrators"`
-	Series        []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+	Narrator  string   `json:"narrator"`
+	Narrators []string `json:"narrators"`
+	Series    []struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
 		Sequence string `json:"sequence"`
 	} `json:"series"`
 	ISBN          string `json:"isbn"`
@@ -104,15 +108,15 @@ type ABSMediaMetadata struct {
 }
 
 type ABSMedia struct {
-	Metadata       ABSMediaMetadata `json:"metadata"`
-	Duration       float64          `json:"duration"`
-	EbookFormat    *string          `json:"ebookFormat"`
+	Metadata    ABSMediaMetadata `json:"metadata"`
+	Duration    float64          `json:"duration"`
+	EbookFormat *string          `json:"ebookFormat"`
 }
 
 type ABSMediaProgress struct {
-	CurrentTime    float64 `json:"currentTime"`
-	IsFinished     bool    `json:"isFinished"`
-	LastUpdate     int64   `json:"lastUpdate"`
+	CurrentTime float64 `json:"currentTime"`
+	IsFinished  bool    `json:"isFinished"`
+	LastUpdate  int64   `json:"lastUpdate"`
 }
 
 type ABSLibraryItem struct {
@@ -136,6 +140,86 @@ func (a *ABS) Items(ctx context.Context, libraryID string) ([]ABSLibraryItem, er
 		return nil, err
 	}
 	return out.Results, nil
+}
+
+// ABSChapter is one chapter marker; start/end are seconds from the item start.
+type ABSChapter struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Title string  `json:"title"`
+}
+
+// ABSAudioFile is one audio track of an item.
+type ABSAudioFile struct {
+	Ino      string  `json:"ino"`
+	Index    int     `json:"index"`
+	Duration float64 `json:"duration"`
+	Filename string  `json:"filename"`
+}
+
+// ABSItemAudio is an item's audio metadata: total duration, chapter markers,
+// and the audio tracks. Used by the reader's "Listen along" mode.
+type ABSItemAudio struct {
+	ItemID     string         `json:"item_id"`
+	Duration   float64        `json:"duration"`
+	Chapters   []ABSChapter   `json:"chapters"`
+	AudioFiles []ABSAudioFile `json:"audio_files"`
+}
+
+// ItemAudio fetches an item's chapter markers and audio-file list from ABS.
+func (a *ABS) ItemAudio(ctx context.Context, itemID string) (*ABSItemAudio, error) {
+	if !a.Configured() {
+		return nil, fmt.Errorf("audiobookshelf not configured")
+	}
+	var d struct {
+		Media struct {
+			Duration   float64      `json:"duration"`
+			Chapters   []ABSChapter `json:"chapters"`
+			AudioFiles []struct {
+				Ino      string  `json:"ino"`
+				Index    int     `json:"index"`
+				Duration float64 `json:"duration"`
+				Metadata struct {
+					Filename string `json:"filename"`
+				} `json:"metadata"`
+			} `json:"audioFiles"`
+		} `json:"media"`
+	}
+	if err := a.getJSON(ctx, "/api/items/"+url.PathEscape(itemID), &d); err != nil {
+		return nil, err
+	}
+	out := &ABSItemAudio{ItemID: itemID, Duration: d.Media.Duration, Chapters: d.Media.Chapters}
+	for _, f := range d.Media.AudioFiles {
+		out.AudioFiles = append(out.AudioFiles, ABSAudioFile{Ino: f.Ino, Index: f.Index, Duration: f.Duration, Filename: f.Metadata.Filename})
+	}
+	// ABS sometimes leaves media.duration at 0; fall back to the audio file's
+	// own duration, then to the last chapter's end.
+	if out.Duration <= 0 {
+		if len(out.AudioFiles) > 0 && out.AudioFiles[0].Duration > 0 {
+			out.Duration = out.AudioFiles[0].Duration
+		} else if n := len(out.Chapters); n > 0 {
+			out.Duration = out.Chapters[n-1].End
+		}
+	}
+	return out, nil
+}
+
+// OpenStream opens an item's audio file, forwarding a Range header so the
+// caller can stream and seek. The caller must close resp.Body.
+func (a *ABS) OpenStream(ctx context.Context, itemID, ino, rangeHdr string) (*http.Response, error) {
+	if !a.Configured() {
+		return nil, fmt.Errorf("audiobookshelf not configured")
+	}
+	u := a.base() + "/api/items/" + url.PathEscape(itemID) + "/file/" + url.PathEscape(ino)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.store.absKey())
+	if rangeHdr != "" {
+		req.Header.Set("Range", rangeHdr)
+	}
+	return a.stream.Do(req)
 }
 
 // Sync pulls ABS items for the configured library, stores them, and attempts
@@ -201,18 +285,18 @@ func (a *ABS) Sync(ctx context.Context) (synced, matched int, err error) {
 		}
 
 		id, err := a.store.upsertABSItem(absItemRecord{
-			libraryID:     libID,
-			itemID:        it.ID,
-			title:         m.Title,
-			author:        author,
-			seriesName:    seriesName,
-			seriesPos:     seriesSeq,
-			isbn:          m.ISBN,
-			duration:      it.Media.Duration,
-			currentTime:   current,
-			progress:      progress,
-			isFinished:    finished,
-			lastSync:      now,
+			libraryID:   libID,
+			itemID:      it.ID,
+			title:       m.Title,
+			author:      author,
+			seriesName:  seriesName,
+			seriesPos:   seriesSeq,
+			isbn:        m.ISBN,
+			duration:    it.Media.Duration,
+			currentTime: current,
+			progress:    progress,
+			isFinished:  finished,
+			lastSync:    now,
 		})
 		if err != nil {
 			a.log.Printf("abs sync: upsert failed for %s: %v", m.Title, err)
@@ -258,20 +342,20 @@ func (a *ABS) Status(ctx context.Context) (map[string]any, error) {
 
 // absItemRecord is the storage shape for an ABS library item.
 type absItemRecord struct {
-	id            int64
-	libraryID     string
-	itemID        string
-	bookID        *int64
-	title         string
-	author        string
-	seriesName    string
-	seriesPos     string
-	isbn          string
-	duration      float64
-	currentTime   float64
-	progress      float64
-	isFinished    bool
-	lastSync      int64
+	id          int64
+	libraryID   string
+	itemID      string
+	bookID      *int64
+	title       string
+	author      string
+	seriesName  string
+	seriesPos   string
+	isbn        string
+	duration    float64
+	currentTime float64
+	progress    float64
+	isFinished  bool
+	lastSync    int64
 }
 
 func (s *Store) migrateABS() error {
@@ -287,7 +371,7 @@ CREATE TABLE IF NOT EXISTS abs_items (
   series_pos    TEXT,
   isbn          TEXT,
   duration      REAL,
-  current_time  REAL,
+  "current_time"  REAL,
   progress      REAL,
   is_finished   INTEGER NOT NULL DEFAULT 0,
   last_sync     INTEGER,
@@ -300,8 +384,11 @@ CREATE INDEX IF NOT EXISTS idx_abs_item ON abs_items(item_id);
 }
 
 func (s *Store) upsertABSItem(r absItemRecord) (int64, error) {
-	res, err := s.db.Exec(`
-INSERT INTO abs_items(library_id,item_id,title,author,series_name,series_pos,isbn,duration,current_time,progress,is_finished,last_sync)
+	// RETURNING id (not LastInsertId): on an ON CONFLICT UPDATE, LastInsertId is
+	// unreliable and broke the sync's match step (returned 0 on re-sync).
+	var id int64
+	err := s.db.QueryRow(`
+INSERT INTO abs_items(library_id,item_id,title,author,series_name,series_pos,isbn,duration,"current_time",progress,is_finished,last_sync)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(item_id) DO UPDATE SET
   library_id=excluded.library_id,
@@ -311,16 +398,14 @@ ON CONFLICT(item_id) DO UPDATE SET
   series_pos=excluded.series_pos,
   isbn=excluded.isbn,
   duration=excluded.duration,
-  current_time=excluded.current_time,
+  "current_time"=excluded."current_time",
   progress=excluded.progress,
   is_finished=excluded.is_finished,
-  last_sync=excluded.last_sync`,
+  last_sync=excluded.last_sync
+RETURNING id`,
 		r.libraryID, r.itemID, r.title, r.author, r.seriesName, r.seriesPos, r.isbn,
-		r.duration, r.currentTime, r.progress, boolInt(r.isFinished), r.lastSync)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
+		r.duration, r.currentTime, r.progress, boolInt(r.isFinished), r.lastSync).Scan(&id)
+	return id, err
 }
 
 func boolInt(b bool) int {
@@ -372,7 +457,7 @@ func (s *Store) absItemForBook(bookID int64) (*absItemRecord, error) {
 	var r absItemRecord
 	var finished int
 	err := s.db.QueryRow(`
-SELECT id,library_id,item_id,book_id,title,author,series_name,series_pos,isbn,duration,current_time,progress,is_finished,last_sync
+SELECT id,library_id,item_id,book_id,title,author,series_name,series_pos,isbn,duration,"current_time",progress,is_finished,last_sync
 FROM abs_items WHERE book_id=? LIMIT 1`, bookID).Scan(
 		&r.id, &r.libraryID, &r.itemID, &r.bookID, &r.title, &r.author, &r.seriesName, &r.seriesPos,
 		&r.isbn, &r.duration, &r.currentTime, &r.progress, &finished, &r.lastSync)
@@ -433,7 +518,7 @@ func (s *Store) absItemsForBooks(bookIDs []int64) (map[int64]*absItemRecord, err
 		args[i] = id
 	}
 	rows, err := s.db.Query(`
-SELECT id,library_id,item_id,book_id,title,author,series_name,series_pos,isbn,duration,current_time,progress,is_finished,last_sync
+SELECT id,library_id,item_id,book_id,title,author,series_name,series_pos,isbn,duration,"current_time",progress,is_finished,last_sync
 FROM abs_items WHERE book_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -455,4 +540,3 @@ FROM abs_items WHERE book_id IN (`+placeholders+`)`, args...)
 	}
 	return out, rows.Err()
 }
-

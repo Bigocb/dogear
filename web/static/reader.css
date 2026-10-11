@@ -62,8 +62,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .tool .aa { font-family: var(--serif); font-size: 1.2rem; line-height: 22px; font-weight: 600; }
 #btn-tts[aria-pressed="true"] { color: var(--accent); }
 
-/* ---------- listen (TTS) ---------- */
-#tts-bar {
+/* ---------- listen (TTS) + listen along (audiobook) ---------- */
+#tts-bar, #audio-bar {
   position: absolute; left: 50%; transform: translateX(-50%);
   /* sit just above the bottom bar while it shows, near the bottom edge when it hides;
      --bb-h is the bottom bar's real height, measured in reader.js */
@@ -82,10 +82,18 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .tts-btn svg { width: 22px; height: 22px; }
 .tts-rate { min-width: 46px; height: 42px; padding: 0 10px; border-radius: 999px; color: var(--fg); font-size: .82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .tts-rate:active { background: var(--raised); }
-#reader-root:not(.chrome) #tts-bar { bottom: calc(var(--safe-b) + 16px); }
-#tts-bar .icon-play { display: none; }
-#tts-bar.paused .icon-pause { display: none; }
-#tts-bar.paused .icon-play { display: block; }
+#reader-root:not(.chrome) #tts-bar, #reader-root:not(.chrome) #audio-bar { bottom: calc(var(--safe-b) + 16px); }
+#tts-bar .icon-play, #audio-bar .icon-play { display: none; }
+#tts-bar.paused .icon-pause, #audio-bar.paused .icon-pause { display: none; }
+#tts-bar.paused .icon-play, #audio-bar.paused .icon-play { display: block; }
+
+/* audiobook bar: wider, with a chapter label + seek slider */
+#audio-bar { max-width: min(560px, calc(100vw - 20px)); gap: 6px; border-radius: var(--r-lg, 18px); }
+#audio-bar .audio-mid { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 110px; padding: 0 2px; }
+#audio-bar .audio-chapter { font-size: .72rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#audio-seek { width: 100%; height: 20px; accent-color: var(--accent); }
+#audio-follow[aria-pressed="false"] { opacity: .5; }
+#btn-listen[aria-pressed="true"] { color: var(--accent); }
 
 /* ---------- voice picker ---------- */
 .voice-select {

@@ -47,29 +47,29 @@ func serveVersionedHTML(w http.ResponseWriter, path string) {
 }
 
 type Book struct {
-	ID          int64    `json:"id"`
-	Title       string   `json:"title"`
-	Author      string   `json:"author"`
-	ISBN        string   `json:"isbn"`
-	Provider    *string  `json:"provider"`
-	ProviderID  *string  `json:"provider_id"`
-	CoverURL    *string  `json:"cover_url"`
-	CoverFile   *string  `json:"cover_file"`
-	Status      string   `json:"status"`
-	AddedAt     int64    `json:"added_at"`
-	UpdatedAt   int64    `json:"updated_at"`
-	Description *string  `json:"description,omitempty"`
-	Publisher   *string  `json:"publisher,omitempty"`
-	PublishYear *int     `json:"publish_year,omitempty"`
-	Language    *string  `json:"language,omitempty"`
-	SeriesName  *string  `json:"series_name,omitempty"`
-	SeriesPos   *float64 `json:"series_position,omitempty"`
-	Genres      *string  `json:"genres,omitempty"`
-	PageCount   *int     `json:"page_count,omitempty"`
-	OwnerID     *int64   `json:"owner_id,omitempty"`
-	Private     bool     `json:"private"`
-	AutoGrab    bool     `json:"auto_grab"`
-	HasFile     bool     `json:"has_file"`
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	Author      string    `json:"author"`
+	ISBN        string    `json:"isbn"`
+	Provider    *string   `json:"provider"`
+	ProviderID  *string   `json:"provider_id"`
+	CoverURL    *string   `json:"cover_url"`
+	CoverFile   *string   `json:"cover_file"`
+	Status      string    `json:"status"`
+	AddedAt     int64     `json:"added_at"`
+	UpdatedAt   int64     `json:"updated_at"`
+	Description *string   `json:"description,omitempty"`
+	Publisher   *string   `json:"publisher,omitempty"`
+	PublishYear *int      `json:"publish_year,omitempty"`
+	Language    *string   `json:"language,omitempty"`
+	SeriesName  *string   `json:"series_name,omitempty"`
+	SeriesPos   *float64  `json:"series_position,omitempty"`
+	Genres      *string   `json:"genres,omitempty"`
+	PageCount   *int      `json:"page_count,omitempty"`
+	OwnerID     *int64    `json:"owner_id,omitempty"`
+	Private     bool      `json:"private"`
+	AutoGrab    bool      `json:"auto_grab"`
+	HasFile     bool      `json:"has_file"`
 	ABSAudio    *ABSAudio `json:"abs,omitempty"`
 }
 
@@ -1082,38 +1082,38 @@ func (a *apiServer) handleBooks(w http.ResponseWriter, r *http.Request) {
 		}
 		// household=1 -> browse shared library (books not on shelf)
 		if r.URL.Query().Get("household") == "1" {
-		books, err := a.store.unshelvedBooks(user.ID, q)
+			books, err := a.store.unshelvedBooks(user.ID, q)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			books = a.attachABSAudio(books)
+			if books == nil {
+				books = []Book{}
+			}
+			writeJSON(w, http.StatusOK, books)
+			return
+		}
+		books, err := a.store.shelfBooks(user.ID, q)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		books = a.attachABSAudio(books)
+		// optional per-status filter (applied client-side too, but keep API parity)
+		if status != "" {
+			var filtered []Book
+			for _, b := range books {
+				if b.Status == status {
+					filtered = append(filtered, b)
+				}
+			}
+			books = filtered
+		}
 		if books == nil {
 			books = []Book{}
 		}
 		writeJSON(w, http.StatusOK, books)
-		return
-	}
-	books, err := a.store.shelfBooks(user.ID, q)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	books = a.attachABSAudio(books)
-	// optional per-status filter (applied client-side too, but keep API parity)
-	if status != "" {
-		var filtered []Book
-		for _, b := range books {
-			if b.Status == status {
-				filtered = append(filtered, b)
-			}
-		}
-		books = filtered
-	}
-	if books == nil {
-		books = []Book{}
-	}
-	writeJSON(w, http.StatusOK, books)
 	case http.MethodPost:
 		var b Book
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
@@ -1190,7 +1190,7 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if ab, err := a.store.absItemForBook(id); err == nil && ab != nil {
-			b.ABSAudio = &ABSAudio{
+			audio := &ABSAudio{
 				ItemID:   ab.itemID,
 				Library:  ab.libraryID,
 				Duration: ab.duration,
@@ -1199,6 +1199,10 @@ func (a *apiServer) handleBook(w http.ResponseWriter, r *http.Request) {
 				Finished: ab.isFinished,
 				LastSync: ab.lastSync,
 			}
+			if a.abs != nil {
+				audio.URL = absItemURL(a.abs.base(), ab.libraryID, ab.itemID)
+			}
+			b.ABSAudio = audio
 		}
 		writeJSON(w, http.StatusOK, b)
 	case http.MethodDelete:
@@ -1972,6 +1976,93 @@ func (a *apiServer) handleSeriesNext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"next": next})
 }
 
+// handleBookAudioInfo returns the linked audiobook's chapter markers and audio
+// files (drives the reader's "Listen along" mode).
+// GET /api/books/{id}/audio-info
+func (a *apiServer) handleBookAudioInfo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	user := userFromCtx(r)
+	if user != nil && !a.store.canAccessBook(user.ID, id) {
+		writeErr(w, http.StatusNotFound, "book not available")
+		return
+	}
+	ab, err := a.store.absItemForBook(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ab == nil {
+		writeErr(w, http.StatusNotFound, "no audiobook linked to this book")
+		return
+	}
+	if a.abs == nil || !a.abs.Configured() {
+		writeErr(w, http.StatusBadRequest, "audiobookshelf not configured")
+		return
+	}
+	info, err := a.abs.ItemAudio(r.Context(), ab.itemID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleBookAudio streams the linked audiobook's audio through Dogear, keeping
+// the ABS token server-side. Range headers are forwarded so the browser can
+// seek. Single-file items only for now (multi-file = a follow-up).
+// GET /api/books/{id}/audio
+func (a *apiServer) handleBookAudio(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	user := userFromCtx(r)
+	if user != nil && !a.store.canAccessBook(user.ID, id) {
+		writeErr(w, http.StatusNotFound, "book not available")
+		return
+	}
+	ab, err := a.store.absItemForBook(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ab == nil {
+		writeErr(w, http.StatusNotFound, "no audiobook linked to this book")
+		return
+	}
+	if a.abs == nil || !a.abs.Configured() {
+		writeErr(w, http.StatusBadRequest, "audiobookshelf not configured")
+		return
+	}
+	info, err := a.abs.ItemAudio(r.Context(), ab.itemID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if len(info.AudioFiles) == 0 {
+		writeErr(w, http.StatusNotFound, "audiobook has no audio files")
+		return
+	}
+	resp, err := a.abs.OpenStream(r.Context(), ab.itemID, info.AudioFiles[0].Ino, r.Header.Get("Range"))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
 func (a *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "time": time.Now().Format(time.RFC3339)})
 }
@@ -2547,6 +2638,8 @@ func main() {
 	mux.HandleFunc("POST /api/books/{id}/bookmarks", api.requireUser(api.handleBookmarks))
 	mux.HandleFunc("DELETE /api/bookmarks/{id}", api.requireUser(api.handleBookmarkDelete))
 	mux.HandleFunc("GET /api/books/{id}/series-next", api.requireUser(api.handleSeriesNext))
+	mux.HandleFunc("GET /api/books/{id}/audio-info", api.requireUser(api.handleBookAudioInfo))
+	mux.HandleFunc("GET /api/books/{id}/audio", api.requireUser(api.handleBookAudio))
 	mux.HandleFunc("GET /api/search", api.requireUser(api.handleSearch))
 	mux.HandleFunc("GET /api/covers/{id}", api.requireUser(api.handleCover))
 	mux.HandleFunc("GET /api/books/{id}/content", api.requireUser(api.handleContent))
