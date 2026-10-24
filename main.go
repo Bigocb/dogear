@@ -2682,6 +2682,14 @@ func main() {
 		w.Header().Set("Content-Type", "application/manifest+json")
 		http.ServeFile(w, r, webDir+"/manifest.json")
 	})
+	// iOS also probes these root paths for the home-screen icon; serve the same file
+	for _, p := range []string{"/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico"} {
+		mux.HandleFunc("GET "+p, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Cache-Control", "public, max-age=60, must-revalidate")
+			http.ServeFile(w, r, webDir+"/static/apple-touch-icon.png")
+		})
+	}
 	// service worker must be served from root scope path; never cache so updates apply immediately
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Service-Worker-Allowed", "/")
