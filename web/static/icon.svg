@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d222b"/>
+      <stop offset="1" stop-color="#0f1217"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <!-- page with its lower-right corner folded over -->
+  <path d="M290 210H734V660L582 812H290Z" fill="#ece6da" stroke="#ece6da" stroke-width="44" stroke-linejoin="round"/>
+  <!-- text lines -->
+  <g stroke="#13161c" stroke-opacity=".16" stroke-width="30" stroke-linecap="round">
+    <path d="M370 330H654"/><path d="M370 430H654"/><path d="M370 530H654"/><path d="M370 630H480"/>
+  </g>
+  <!-- the dog-ear -->
+  <path d="M734 660L582 812V690Q582 660 612 660Z" fill="#d1ad66" stroke="#d1ad66" stroke-width="44" stroke-linejoin="round"/>
+</svg>
