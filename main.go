@@ -36,6 +36,7 @@ func serveVersionedHTML(w http.ResponseWriter, path string) {
 	}
 	html := string(data)
 	html = strings.ReplaceAll(html, "/static/app.js\"", "/static/app.js?v="+buildStamp+"\"")
+	html = strings.ReplaceAll(html, "/static/offline.js\"", "/static/offline.js?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/admin.js\"", "/static/admin.js?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/style.css\"", "/static/style.css?v="+buildStamp+"\"")
 	html = strings.ReplaceAll(html, "/static/reader.js\"", "/static/reader.js?v="+buildStamp+"\"")

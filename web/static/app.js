@@ -51,6 +51,8 @@ let trackedProviders = new Set();
 let scope = 'shelf';            // 'shelf' | 'household'
 let filter = '';
 let libQuery = '';
+let offlineIds = new Set();     // book ids downloaded to this device
+let isOffline = !navigator.onLine;
 
 const STATUS_LABEL = {
   wanted: 'Wanted', grabbed: 'Downloading', imported: 'Unread',
@@ -58,8 +60,9 @@ const STATUS_LABEL = {
 };
 
 async function refreshShelf() {
-  const [books, home] = await Promise.all([api('/books'), api('/home').catch(() => null)]);
+  const [books, home, offIds] = await Promise.all([api('/books'), api('/home').catch(() => null), Offline.ids()]);
   shelf = books || [];
+  offlineIds = offIds;
   trackedProviders = new Set(shelf.filter(b => b.provider && b.provider_id).map(b => `${b.provider}:${b.provider_id}`));
   percents = new Map();
   for (const b of [...(home?.continue || []), ...(home?.recent || [])]) {
@@ -103,6 +106,7 @@ function coverEl(b, { remote = false } = {}) {
     if (b.status === 'reading') c.classList.add('dogeared');
     if (b.status === 'read') c.insertAdjacentHTML('beforeend', '<span class="finished-tag" title="Finished"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>');
     if (b.status === 'wanted' || b.status === 'grabbed') c.classList.add('pending');
+    if (offlineIds.has(b.id)) c.insertAdjacentHTML('beforeend', '<span class="offline-tag" title="Available offline"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg></span>');
   }
   return c;
 }
@@ -126,6 +130,7 @@ function bookTile(b, { onClick } = {}) {
   if (b.abs?.item_id) {
     el.insertAdjacentHTML('beforeend', `<div class="abs-badge" title="Audiobook available"></div>`);
   }
+  if (isOffline && hasFile(b) && !offlineIds.has(b.id)) el.classList.add('unavail');
   el.onclick = onClick || (() => openBook(b));
   return el;
 }
@@ -256,12 +261,14 @@ async function renderLibrary() {
       const f = c.dataset.filter;
       const n = !f ? matches.length
         : f === 'audio' ? matches.filter(hasAudio).length
+        : f === 'offline' ? matches.filter(b => offlineIds.has(b.id)).length
         : matches.filter(b => b.status === f).length;
       c.innerHTML = `${c.dataset.label || (c.dataset.label = c.textContent)}<span class="n">${n}</span>`;
       c.classList.toggle('on', f === filter);
     });
     books = !filter ? matches
       : filter === 'audio' ? matches.filter(hasAudio)
+      : filter === 'offline' ? matches.filter(b => offlineIds.has(b.id))
       : matches.filter(b => b.status === filter);
   }
   grid.innerHTML = '';
@@ -270,6 +277,8 @@ async function renderLibrary() {
       ? `<div class="empty-state"><h3>No matches</h3><p>Nothing ${scope === 'household' ? 'in the household library' : 'on your shelf'} matches “${escapeHtml(libQuery)}”.</p></div>`
       : scope === 'household'
         ? '<div class="empty-state"><h3>All caught up</h3><p>Every book in the household library is already on your shelf.</p></div>'
+        : filter === 'offline'
+          ? '<div class="empty-state"><h3>Nothing downloaded</h3><p>Open a book and tap “Download for offline” to read it without a connection.</p></div>'
         : filter === 'audio'
           ? '<div class="empty-state"><h3>No audiobooks</h3><p>None of your books have a linked audiobook yet. Set up Audiobookshelf in Admin and run a sync.</p></div>'
           : filter
@@ -337,6 +346,37 @@ function openBook(b) {
   sheetBook = b;
   renderBookSheet();
   openSheet('#book-scrim');
+}
+
+// Tap-to-download for offline reading. Removal is manual only.
+function offlineButton(b) {
+  const el = document.createElement('button');
+  el.className = 'btn secondary block offline-btn';
+  const paint = () => {
+    const f = Offline.downloading.get(b.id);
+    if (f !== undefined) { el.disabled = true; el.textContent = f ? `Downloading… ${Math.round(f * 100)}%` : 'Downloading…'; return; }
+    el.disabled = false;
+    el.textContent = offlineIds.has(b.id) ? 'Remove download' : 'Download for offline';
+    el.classList.toggle('on', offlineIds.has(b.id));
+  };
+  paint();
+  el.onclick = async () => {
+    try {
+      if (offlineIds.has(b.id)) {
+        await Offline.remove(b.id);
+        offlineIds.delete(b.id);
+        toast('Removed from this device');
+      } else {
+        if (isOffline) return toast('Connect to the internet to download', 'error');
+        await Offline.download(b.id, paint);
+        offlineIds.add(b.id);
+        toast(`“${b.title}” is available offline`);
+      }
+    } catch (e) { toastError('Download failed', e); }
+    paint();
+    refreshCurrent();
+  };
+  return el;
 }
 
 function renderBookSheet() {
@@ -458,6 +498,8 @@ function renderBookSheet() {
       actions.append(enrichBtn);
   }
 
+  if (hasFile(b) && Offline.supported) actions.append(offlineButton(b));
+
   // sharing toggle: private by default, share explicitly
   const privRow = document.createElement('label');
   privRow.className = 'priv-toggle';
@@ -577,7 +619,11 @@ async function openReader(b) {
     if (typeof openPicker === 'function') openPicker(b);
     return;
   }
-  if (b.status !== 'reading') {
+  if (isOffline && !offlineIds.has(b.id)) {
+    toast(`“${b.title}” isn’t downloaded for offline reading.`, 'error');
+    return;
+  }
+  if (b.status !== 'reading' && !isOffline) {
     try { await api(`/books/${b.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'reading' }) }); } catch {}
   }
   location.href = `/reader?book=${b.id}`;
@@ -814,15 +860,51 @@ function renderAccount() {
   $$('[data-account]').forEach(b => { b.textContent = initial; b.onclick = () => openSheet('#account-scrim'); });
   $('#account-menu').innerHTML = `
     <div class="who">Signed in as<b>${escapeHtml(me.username)}</b></div>
+    <div class="who" id="offline-usage"></div>
+    <button id="btn-clear-dl" hidden>Remove all downloads</button>
     <button id="btn-import">Import reading list…</button>
     ${me.role === 'admin' ? '<a href="/admin">Admin settings</a>' : ''}
     <button id="btn-logout">Sign out</button>`;
   $('#btn-logout').onclick = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
+    await Offline.clearAll();
     location.href = '/login';
   };
+  $('#btn-clear-dl').onclick = async () => {
+    for (const id of offlineIds) await Offline.remove(id);
+    offlineIds = new Set();
+    toast('Downloads removed');
+    refreshOfflineUsage();
+    refreshCurrent();
+  };
+  refreshOfflineUsage();
   $('#btn-import').onclick = () => { closeSheet('#account-scrim'); openImport(); };
 }
+
+async function refreshOfflineUsage() {
+  const box = $('#offline-usage');
+  if (!box || !Offline.supported) return;
+  const ids = await Offline.ids();
+  const u = await Offline.usage();
+  box.innerHTML = `Offline<b>${ids.size} book${ids.size === 1 ? '' : 's'}${u ? ' · ' + Offline.fmt(u.used) + ' used' : ''}</b>`;
+  $('#btn-clear-dl').hidden = ids.size === 0;
+}
+
+// ---------- offline banner ----------
+
+function paintConnectivity() {
+  let bar = $('#offline-banner');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'offline-banner';
+    bar.textContent = 'You’re offline — downloaded books are available';
+    document.body.prepend(bar);
+  }
+  bar.hidden = !isOffline;
+}
+window.addEventListener('online', () => { isOffline = false; paintConnectivity(); refreshCurrent(); });
+window.addEventListener('offline', () => { isOffline = true; paintConnectivity(); refreshCurrent(); });
+paintConnectivity();
 
 // ---------- reading-list import ----------
 
@@ -908,7 +990,7 @@ function showUpdateToast(reload) {
   (document.getElementById('toasts') || document.body).appendChild(t);
 }
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('/sw.js')
     .then(reg => {
       reg.addEventListener('updatefound', () => {

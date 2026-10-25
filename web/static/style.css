@@ -429,3 +429,10 @@ main {
   border-top: 1px solid var(--rule); margin-top: 6px;
 }
 .priv-toggle input { width: 18px; height: 18px; accent-color: var(--gilt); }
+
+/* ---- offline ---- */
+#offline-banner { position: sticky; top: 0; z-index: 50; padding: calc(6px + var(--safe-t)) 12px 6px; text-align: center; font-size: .8rem; font-weight: 600; background: var(--gilt); color: var(--gilt-ink); }
+.cover .offline-tag { position: absolute; left: 6px; bottom: 6px; width: 22px; height: 22px; border-radius: 50%; background: rgba(19,22,28,.82); display: grid; place-items: center; }
+.cover .offline-tag svg { width: 14px; height: 14px; fill: none; stroke: var(--gilt); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.book.unavail { opacity: .38; }
+.btn.offline-btn.on { border-color: var(--gilt); color: var(--gilt); }

@@ -128,11 +128,6 @@ async function main() {
   document.documentElement.dataset.layout = isFixed ? 'fixed' : 'reflow'
   if (isFixed) applyPdfZoom()
 
-  // ask the service worker to keep this book for offline use
-  if (navigator.serviceWorker?.controller && location.protocol === 'https:') {
-    navigator.serviceWorker.controller.postMessage({ type: 'cache-book', path: contentURL });
-  }
-
   view.addEventListener('relocate', e => onRelocate(e.detail))
   view.addEventListener('load', ({ detail }) => { applyTypography(); wireTaps(detail.doc); if (ab.on) abSent.doc = null })
   view.addEventListener('show-annotation', e => { annotationTapAt = Date.now(); openHighlight(e.detail.value) })
