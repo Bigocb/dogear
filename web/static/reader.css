@@ -42,7 +42,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   top: 0; display: flex; align-items: center; gap: 4px;
   padding: calc(var(--safe-t) + 4px) 6px 4px; border-bottom: 1px solid var(--rule);
 }
-#reader-bottombar { bottom: var(--vb); padding: 4px 14px calc(var(--safe-b) + 2px); border-top: 1px solid var(--rule); }
+#reader-bottombar { bottom: var(--vb); padding: 10px 14px calc(var(--safe-b) + 6px); border-top: 1px solid var(--rule); }
 #reader-root:not(.chrome) #reader-topbar { transform: translateY(-100%); opacity: 0; pointer-events: none; }
 #reader-root:not(.chrome) #reader-bottombar { transform: translateY(100%); opacity: 0; pointer-events: none; }
 
@@ -54,12 +54,12 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 #reader-chapter { color: var(--muted); font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 
 .scrub { max-width: 720px; margin: 0 auto; }
-#progress-slider { width: 100%; height: 24px; margin: 0; accent-color: var(--accent); }
+#progress-slider { width: 100%; height: 28px; margin: 0; accent-color: var(--accent); }
 .scrub-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; margin-top: -2px; }
 /* auto-columns: fits 4 or 5 tools on one row (the Audiobook button is only
    present for books with a linked audiobook) instead of wrapping. */
-.tools { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; max-width: 520px; margin: 0 auto; }
-.tool { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 44px; padding: 2px 0; border-radius: 12px; color: var(--fg); font-size: .7rem; font-weight: 600; }
+.tools { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; max-width: 520px; margin: 6px auto 0; }
+.tool { display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 52px; padding: 4px 0; border-radius: 12px; color: var(--fg); font-size: .7rem; font-weight: 600; }
 .tool:active { background: var(--raised); }
 .tool .aa { font-family: var(--serif); font-size: 1.2rem; line-height: 22px; font-weight: 600; }
 #btn-tts[aria-pressed="true"] { color: var(--accent); }
