@@ -13,8 +13,11 @@
       const layoutH = Math.max(window.innerHeight, root.clientHeight)
       over = Math.round(layoutH - screenH)
     }
-    // only correct the small, status-bar-sized overflow this bug produces
-    root.style.setProperty('--vb', over > 0 && over < 150 ? `${over}px` : '0px')
+    // only correct the small, status-bar-sized mismatch this bug produces.
+    // Positive: layout taller than the screen (controls pushed off the glass),
+    // lift them. Negative: layout shorter than the screen (a dead strip under
+    // the controls), push them down by the shortfall.
+    root.style.setProperty('--vb', Math.abs(over) < 150 ? `${over}px` : '0px')
   }
   measure()
   addEventListener('resize', measure)
