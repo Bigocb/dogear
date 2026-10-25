@@ -988,3 +988,37 @@ func (s *Store) userStats(userID int64) (*UserStats, error) {
 }
 
 var _ = json.Marshal
+
+// progressTimes maps book id -> when the user last saved reading progress.
+func (s *Store) progressTimes(userID int64) map[int64]int64 {
+	out := map[int64]int64{}
+	rows, err := s.db.Query(`SELECT book_id, updated_at FROM progress WHERE user_id=?`, userID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, t int64
+		if rows.Scan(&id, &t) == nil {
+			out[id] = t
+		}
+	}
+	return out
+}
+
+// fileTimes maps book id -> when its newest file was imported.
+func (s *Store) fileTimes() map[int64]int64 {
+	out := map[int64]int64{}
+	rows, err := s.db.Query(`SELECT book_id, MAX(imported_at) FROM files GROUP BY book_id`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, t int64
+		if rows.Scan(&id, &t) == nil {
+			out[id] = t
+		}
+	}
+	return out
+}

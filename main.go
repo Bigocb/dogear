@@ -648,6 +648,22 @@ func (a *apiServer) handleHome(w http.ResponseWriter, r *http.Request) {
 			percents[b.ID] = pct
 		}
 	}
+	// Order by real activity, not by when a book landed on the shelf: a book you
+	// just picked up should lead "Continue reading" even if it was shelved long
+	// ago, and a fresh download should lead "Recently added" whatever its shelf
+	// timestamp says. Stable, so ties keep the shelf order.
+	lastRead := a.store.progressTimes(userFromCtx(r).ID)
+	lastFile := a.store.fileTimes()
+	sort.SliceStable(all, func(i, j int) bool {
+		bi, bj := all[i], all[j]
+		if bi.Status == "reading" && bj.Status == "reading" {
+			return lastRead[bi.ID] > lastRead[bj.ID]
+		}
+		if bi.Status == "imported" && bj.Status == "imported" {
+			return lastFile[bi.ID] > lastFile[bj.ID]
+		}
+		return false
+	})
 	var reading, wantedCount int
 	var continueRow []Book
 	var recentRow []Book
@@ -659,7 +675,7 @@ func (a *apiServer) handleHome(w http.ResponseWriter, r *http.Request) {
 				continueRow = append(continueRow, all[i])
 			}
 		case "imported":
-			// "recently added" = latest imported (list is already desc by added_at)
+			// "recently added" = most recently downloaded unread books (sorted above)
 			if len(recentRow) < 12 {
 				recentRow = append(recentRow, b)
 			}
